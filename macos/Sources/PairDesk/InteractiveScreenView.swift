@@ -107,14 +107,25 @@ final class ScreenCanvas: NSView {
 }
 
 enum ScreenCoordinateMapper {
-    static func normalized(point: CGPoint, container: CGRect, contentSize: CGSize) -> CGPoint? {
-        guard contentSize.width > 0, contentSize.height > 0, container.width > 0, container.height > 0,
-              point.x.isFinite, point.y.isFinite else { return nil }
+    static func contentRect(container: CGRect, contentSize: CGSize) -> CGRect? {
+        guard contentSize.width > 0, contentSize.height > 0, container.width > 0, container.height > 0 else { return nil }
         let scale = min(container.width / contentSize.width, container.height / contentSize.height)
-        let rect = CGRect(x: container.midX - contentSize.width * scale / 2,
-                          y: container.midY - contentSize.height * scale / 2,
-                          width: contentSize.width * scale, height: contentSize.height * scale)
+        return CGRect(x: container.midX - contentSize.width * scale / 2,
+                      y: container.midY - contentSize.height * scale / 2,
+                      width: contentSize.width * scale, height: contentSize.height * scale)
+    }
+
+    static func normalized(point: CGPoint, container: CGRect, contentSize: CGSize) -> CGPoint? {
+        guard point.x.isFinite, point.y.isFinite,
+              let rect = contentRect(container: container, contentSize: contentSize) else { return nil }
         guard rect.contains(point) else { return nil }
         return CGPoint(x: (point.x - rect.minX) / rect.width, y: (point.y - rect.minY) / rect.height)
+    }
+
+    static func displayedPoint(normalized: CGPoint, container: CGRect, contentSize: CGSize) -> CGPoint? {
+        guard normalized.x.isFinite, normalized.y.isFinite,
+              (0...1).contains(normalized.x), (0...1).contains(normalized.y),
+              let rect = contentRect(container: container, contentSize: contentSize) else { return nil }
+        return CGPoint(x: rect.minX + normalized.x * rect.width, y: rect.minY + normalized.y * rect.height)
     }
 }

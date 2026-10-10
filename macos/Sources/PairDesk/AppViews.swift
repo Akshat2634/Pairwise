@@ -82,10 +82,31 @@ struct SharedScreenWindow: View {
     @State private var showTranscript = false
     @State private var permissions = false
     @State private var sourcePicker = false
+    private var shareStatus: String? {
+        guard let sharer = rtc.activeSharerIdentity else { return nil }
+        switch rtc.controlState {
+        case .granted:
+            return "You have control of \(rtc.participantName(for: sharer))'s Mac"
+        case .requesting:
+            return "Connecting remote control…"
+        case .viewer:
+            return rtc.remoteControlAvailable
+                ? "Viewing \(rtc.participantName(for: sharer)) · control available"
+                : "Viewing \(rtc.participantName(for: sharer)) · view only"
+        case .host:
+            return "You are sharing your display"
+        case .unavailable:
+            return "Shared screen · view only"
+        }
+    }
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
                 Text(rtc.participants.filter { !$0.isLocal }.map(\.name).joined(separator: ", ")).font(.headline).lineLimit(1)
+                if let shareStatus {
+                    Label(shareStatus, systemImage: rtc.controlState.isGranted ? "cursorarrow.motionlines" : "display")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Spacer()
                 Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Image(systemName: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
                 Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { sourcePicker = true } }
@@ -97,7 +118,28 @@ struct SharedScreenWindow: View {
                 ZStack {
                     Color.black
                     if let track = rtc.screenTrack, !rtc.isSharing {
-                        InteractiveScreenView(track: track, rtc: rtc).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        InteractiveScreenView(track: track, rtc: rtc)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .overlay {
+                                if let dimensions = track.dimensions {
+                                    GeometryReader { geometry in
+                                        let contentSize = CGSize(width: Int(dimensions.width), height: Int(dimensions.height))
+                                        ForEach(rtc.remotePointers) { pointer in
+                                            if let point = ScreenCoordinateMapper.displayedPoint(
+                                                normalized: CGPoint(x: pointer.x, y: pointer.y),
+                                                container: CGRect(origin: .zero, size: geometry.size),
+                                                contentSize: contentSize
+                                            ) {
+                                                RemotePointerBadge(name: rtc.participantName(for: pointer.id), color: cursorColor(for: pointer.id))
+                                                    .position(x: min(max(point.x + 54, 54), geometry.size.width - 54),
+                                                              y: min(max(point.y + 14, 14), geometry.size.height - 14))
+                                                    .transition(.opacity)
+                                            }
+                                        }
+                                    }
+                                    .allowsHitTesting(false)
+                                }
+                            }
                     } else {
                         VStack(spacing: 16) {
                             Image(systemName: rtc.isSharing ? "display.and.arrow.up" : "phone").font(.system(size: 44))
@@ -113,6 +155,27 @@ struct SharedScreenWindow: View {
         .sheet(isPresented: $permissions) { PermissionsView() }
         .sheet(isPresented: $sourcePicker) { ScreenSharePickerView(store: store) }
         .alert("PairDesk", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
+    }
+
+    private func cursorColor(for identity: String) -> Color {
+        let value = identity.utf8.reduce(UInt64(2_166_136_261)) { ($0 ^ UInt64($1)) &* 16_777_619 }
+        return Color(hue: Double(value % 360) / 360, saturation: 0.78, brightness: 0.96)
+    }
+}
+
+private struct RemotePointerBadge: View {
+    let name: String
+    let color: Color
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(name).font(.system(size: 10, weight: .semibold)).lineLimit(1)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .foregroundStyle(.white)
+        .background(.black.opacity(0.82), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.9), lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 5, y: 2)
     }
 }
 

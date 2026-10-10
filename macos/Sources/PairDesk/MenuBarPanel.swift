@@ -58,6 +58,12 @@ struct MenuBarPanel: View {
                         Button("Microphone access needed to talk…") { show("permissions") }.font(.caption)
                     }
                     if rtc.isSharing {
+                        if let controller = rtc.activeControllerIdentity {
+                            Label("\(rtc.participantName(for: controller)) is controlling your Mac", systemImage: "cursorarrow.motionlines")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else if rtc.remoteControlAvailable && rtc.automaticControlEnabled {
+                            Text("Remote control is ready when a teammate interacts").font(.caption).foregroundStyle(.secondary)
+                        }
                         if rtc.remoteControlAvailable {
                             Button(rtc.automaticControlEnabled ? "Stop control" : "Allow control again") { if rtc.automaticControlEnabled { rtc.pauseRemoteControl() } else { rtc.resumeRemoteControl() } }
                         } else if !permissions.accessibility {

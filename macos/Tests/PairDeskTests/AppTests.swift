@@ -23,6 +23,13 @@ final class AppTests: XCTestCase {
         XCTAssertEqual(p?.y, 0)
         XCTAssertNil(ScreenCoordinateMapper.normalized(point: CGPoint(x: 100, y: 25), container: CGRect(x: 0, y: 0, width: 200, height: 200), contentSize: CGSize(width: 200, height: 100)))
     }
+    func testRemotePointerMapsIntoAspectFitContentAndRejectsOutsideCoordinates() {
+        let container = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        let size = CGSize(width: 200, height: 100)
+        XCTAssertEqual(ScreenCoordinateMapper.displayedPoint(normalized: CGPoint(x: 0.5, y: 0.5), container: container, contentSize: size), CGPoint(x: 500, y: 300))
+        XCTAssertEqual(ScreenCoordinateMapper.displayedPoint(normalized: CGPoint(x: 0, y: 0), container: container, contentSize: size), CGPoint(x: 0, y: 50))
+        XCTAssertNil(ScreenCoordinateMapper.displayedPoint(normalized: CGPoint(x: 1.1, y: 0.5), container: container, contentSize: size))
+    }
     func testPermissionGuidanceIdentifiesMountedImageAndInstalledCopies() {
         let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
         XCTAssertEqual(AppCopyLocation.classify(bundleURL: URL(fileURLWithPath: "/Applications/PairDesk.app"), homeDirectory: home), .applications)

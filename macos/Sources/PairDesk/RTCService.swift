@@ -74,6 +74,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var controlTransportFailed = false
     private let maxQueuedControlSends = 256
 
+    var activeControllerIdentity: String? { isSharing ? controlArbiter.driverIdentity : nil }
+
+    func participantName(for identity: String) -> String {
+        participants.first(where: { $0.identity == identity })?.name ?? identity
+    }
+
     override init() {
         super.init()
         inputMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
@@ -596,6 +602,15 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
 
     private func receive(_ message: RemoteControlMessage, sender: String) {
         guard let localIdentity else { return }
+        if message.kind == .pointer, !isSharing {
+            guard let sharer = activeSharerIdentity, sender != localIdentity, sender != sharer,
+                  room?.remoteParticipants.values.contains(where: { $0.identity?.stringValue == sender }) == true,
+                  let x = message.x, let y = message.y,
+                  x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y)
+            else { return }
+            recordRemotePointer(identity: sender, x: x, y: y)
+            return
+        }
         switch message.kind {
         case .request:
             guard isSharing, !shareIsWindow, sender != localIdentity else { return }
@@ -654,22 +669,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             controlState = .granted(identity: sender, expiresAt: expiry)
             if message.kind == .pointer, let x = message.x, let y = message.y,
                x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) {
-                remotePointers.removeAll { $0.id == sender }
-                let timestamp = Date()
-                remotePointers.append(RemotePointer(id: sender, x: x, y: y, updatedAt: timestamp))
-                let sourceRoom = room
+                recordRemotePointer(identity: sender, x: x, y: y)
                 if !shareIsWindow, let bounds = shareBounds {
                     let activeButton = [0, 1, 2].first(where: heldButtons.contains)
                         .flatMap { CGMouseButton(rawValue: UInt32($0)) }
                     _ = RemoteInputInjector.movePointer(x: x, y: y, in: bounds, draggingButton: activeButton)
-                }
-                Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(3))
-                    guard let self, !Task.isCancelled,
-                          self.room === sourceRoom,
-                          self.remotePointers.first(where: { $0.id == sender })?.updatedAt == timestamp
-                    else { return }
-                    self.remotePointers.removeAll { $0.id == sender }
                 }
             } else if message.kind == .key, let code = message.code, let down = message.down {
                 guard code < 128, (message.modifiers ?? 0) & ~Self.allowedModifierMask == 0 else { return }
@@ -691,6 +695,21 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                       !shareIsWindow { _ = RemoteInputInjector.scroll(deltaX: dx, deltaY: dy) }
             else if message.kind == .releaseAll { releaseInjectedInputs() }
             startLeaseWatch()
+        }
+    }
+
+    private func recordRemotePointer(identity: String, x: Double, y: Double) {
+        let timestamp = Date()
+        remotePointers.removeAll { $0.id == identity }
+        remotePointers.append(RemotePointer(id: identity, x: x, y: y, updatedAt: timestamp))
+        let sourceRoom = room
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled,
+                  self.room === sourceRoom,
+                  self.remotePointers.first(where: { $0.id == identity })?.updatedAt == timestamp
+            else { return }
+            self.remotePointers.removeAll { $0.id == identity }
         }
     }
 
