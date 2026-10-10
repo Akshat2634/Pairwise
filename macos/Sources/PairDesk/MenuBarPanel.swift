@@ -51,6 +51,10 @@ struct MenuBarPanel: View {
                 }
                 if store.activeRoom != nil {
                     Text(rtc.participants.filter { !$0.isLocal }.map(\.name).joined(separator: ", ")).font(.subheadline.bold()).lineLimit(2)
+                    if rtc.isReconnecting {
+                        Label(rtc.isSharing ? "Reconnecting · control paused" : "Reconnecting call…", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     HStack {
                         Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Label(rtc.isMicrophoneEnabled ? "Mute" : "Unmute", systemImage: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
                         if rtc.isMicrophoneEnabled {
@@ -94,6 +98,7 @@ struct MenuBarPanel: View {
                         }
                         if rtc.remoteControlAvailable {
                             Button(rtc.automaticControlEnabled ? "Stop control" : "Allow control again") { if rtc.automaticControlEnabled { rtc.pauseRemoteControl() } else { rtc.resumeRemoteControl() } }
+                                .disabled(rtc.isReconnecting)
                         } else if rtc.isSharingWindow {
                             Text("Window sharing is view-only").font(.caption).foregroundStyle(.secondary)
                         } else if !permissions.accessibility {

@@ -103,6 +103,10 @@ struct SharedScreenWindow: View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
                 Text(rtc.participants.filter { !$0.isLocal }.map(\.name).joined(separator: ", ")).font(.headline).lineLimit(1)
+                if rtc.isReconnecting {
+                    Label(rtc.isSharing ? "Reconnecting · control paused" : "Reconnecting call…", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption).foregroundStyle(.orange).lineLimit(1)
+                }
                 if let shareStatus {
                     Label(shareStatus, systemImage: rtc.controlState.isGranted ? "cursorarrow.motionlines" : "display")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)

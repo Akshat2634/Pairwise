@@ -47,6 +47,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var savedAudioOutputUnavailable = false
     @Published private(set) var localMicrophoneLevel = 0.0
     @Published private(set) var screenNetworkQuality: ScreenNetworkQuality = .measuring
+    @Published private(set) var isReconnecting = false
 
     /// Called for captured local microphone and subscribed remote audio tracks.
     /// Buffers are copied to normalized Float samples before delivery. It remains
@@ -60,6 +61,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var remoteAudioRenderers: [String: (identity: String, track: RemoteAudioTrack, renderer: PCMForwarder)] = [:]
     private var shareTrack: LocalVideoTrack?
     private var isStartingShare = false
+    private var resumeControlAfterReconnect = false
     private var shareBounds: CGRect?
     private var shareIsWindow = false
     private var controlGate = RemoteControlGate()
@@ -180,6 +182,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         }
         self.room = nil
         room = nil
+        isReconnecting = false
+        resumeControlAfterReconnect = false
         screenTrack = nil
         shareTrack = nil
         isSharing = false
@@ -523,6 +527,39 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         Task { @MainActor [weak self] in
             guard let self, self.room === room else { return }
             self.connected = true
+            self.setReconnecting(false)
+            self.refreshParticipants()
+            self.refreshSharer()
+        }
+    }
+
+    nonisolated func roomIsReconnecting(_ room: Room) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room else { return }
+            self.setReconnecting(true)
+        }
+    }
+
+    nonisolated func room(_ room: Room, didStartReconnectWithMode reconnectMode: ReconnectMode) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room else { return }
+            self.setReconnecting(true)
+        }
+    }
+
+    nonisolated func roomDidReconnect(_ room: Room) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room else { return }
+            self.setReconnecting(false)
+            self.refreshParticipants()
+            self.refreshSharer()
+        }
+    }
+
+    nonisolated func room(_ room: Room, didCompleteReconnectWithMode reconnectMode: ReconnectMode) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room else { return }
+            self.setReconnecting(false)
             self.refreshParticipants()
             self.refreshSharer()
         }
@@ -534,6 +571,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             self.emergencyStop()
             self.detachAudioRenderers()
             self.connected = false
+            self.isReconnecting = false
+            self.resumeControlAfterReconnect = false
             self.error = error?.localizedDescription
             self.status = "Disconnected"
             self.isSharing = false
@@ -941,6 +980,26 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     // MARK: State and audio
+
+    private func setReconnecting(_ reconnecting: Bool) {
+        guard isReconnecting != reconnecting else { return }
+        isReconnecting = reconnecting
+        if reconnecting {
+            status = "Reconnecting…"
+            if isSharing {
+                resumeControlAfterReconnect = automaticControlEnabled
+                if automaticControlEnabled { pauseRemoteControl() }
+                else { releaseInjectedInputs() }
+            } else {
+                emergencyStop()
+            }
+            return
+        }
+
+        status = connected ? "Connected" : "Disconnected"
+        if resumeControlAfterReconnect, isSharing { resumeRemoteControl() }
+        resumeControlAfterReconnect = false
+    }
 
     private func refreshParticipants() {
         guard let room else { return }
