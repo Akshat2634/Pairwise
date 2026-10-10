@@ -110,6 +110,7 @@ struct SharedScreenWindow: View {
                 Spacer()
                 Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Image(systemName: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
                 Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { sourcePicker = true } }
+                if rtc.isSharing { Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy) }
                 Button { showTranscript.toggle() } label: { Image(systemName: "text.bubble") }.help("Local transcript")
                 Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
                 Button("Hang up") { Task { await store.leave() } }.tint(.red)

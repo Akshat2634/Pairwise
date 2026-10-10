@@ -53,6 +53,9 @@ struct MenuBarPanel: View {
                     HStack {
                         Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Label(rtc.isMicrophoneEnabled ? "Mute" : "Unmute", systemImage: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
                         Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { show("share") } }
+                        if rtc.isSharing {
+                            Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy)
+                        }
                         Menu {
                             Section("Microphone") {
                                 if rtc.audioInputDevices.isEmpty { Text("No microphones found") }

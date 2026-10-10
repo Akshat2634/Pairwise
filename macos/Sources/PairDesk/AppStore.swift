@@ -349,6 +349,25 @@ final class AppStore: ObservableObject {
         }
     }
 
+    func changeScreenSource() async {
+        guard !busy, let room = activeRoom, rtc.isSharing else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            // Pick first so canceling leaves the current share untouched.
+            let filter = try await SystemScreenPicker.shared.chooseDisplay()
+            await rtc.stopScreenShare()
+            guard !rtc.isSharing else { throw APIError(status: 0, message: "The current screen share could not be stopped safely.") }
+            try await rtc.startScreenShare(contentFilter: filter)
+            screenClaimRoomID = room.id
+        } catch {
+            if (error as? CocoaError)?.code != .userCancelled {
+                self.error = "Could not change the shared source: \(error.localizedDescription)"
+                if !rtc.isSharing { try? await releaseScreenClaim() }
+            }
+        }
+    }
+
     func stopSharing() async {
         await rtc.stopScreenShare()
         guard !rtc.isSharing else { return }
