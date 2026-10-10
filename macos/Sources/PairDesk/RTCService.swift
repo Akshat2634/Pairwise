@@ -43,6 +43,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var audioOutputDevices: [AudioDevice] = []
     @Published private(set) var selectedAudioInputID = ""
     @Published private(set) var selectedAudioOutputID = ""
+    @Published private(set) var localMicrophoneLevel = 0.0
 
     /// Called for captured local microphone and subscribed remote audio tracks.
     /// Buffers are copied to normalized Float samples before delivery. It remains
@@ -52,6 +53,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
 
     private var room: Room?
     private var localAudioRenderer: PCMForwarder?
+    private var lastMicrophoneMeterUpdate: TimeInterval = 0
     private var remoteAudioRenderers: [String: (identity: String, track: RemoteAudioTrack, renderer: PCMForwarder)] = [:]
     private var shareTrack: LocalVideoTrack?
     private var isStartingShare = false
@@ -204,7 +206,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             try await room.localParticipant.setMicrophone(enabled: enabled)
             isMicrophoneEnabled = enabled
             if enabled { attachLocalAudioRenderer() }
-            else { detachLocalAudioRenderer() }
+            else { detachLocalAudioRenderer(); localMicrophoneLevel = 0 }
         } catch {
             self.error = "Microphone could not be \(enabled ? "enabled" : "disabled"): \(error.localizedDescription)"
             throw error
@@ -959,8 +961,15 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private func makeAudioRenderer(room: Room, identity: String, name: String) -> PCMForwarder {
         PCMForwarder { [weak self] samples, sampleRate in
             Task { @MainActor [weak self] in
-                guard let self, self.room === room, self.audioForwardingConsented else { return }
-                self.onAudioBuffer?(identity, name, samples, sampleRate)
+                guard let self, self.room === room else { return }
+                if identity == self.localIdentity {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if now - self.lastMicrophoneMeterUpdate >= 0.1 {
+                        self.lastMicrophoneMeterUpdate = now
+                        self.localMicrophoneLevel = AudioMeter.level(samples: samples)
+                    }
+                }
+                if self.audioForwardingConsented { self.onAudioBuffer?(identity, name, samples, sampleRate) }
             }
         }
     }

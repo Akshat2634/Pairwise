@@ -52,6 +52,9 @@ struct MenuBarPanel: View {
                     Text(rtc.participants.filter { !$0.isLocal }.map(\.name).joined(separator: ", ")).font(.subheadline.bold()).lineLimit(2)
                     HStack {
                         Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Label(rtc.isMicrophoneEnabled ? "Mute" : "Unmute", systemImage: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
+                        if rtc.isMicrophoneEnabled {
+                            ProgressView(value: rtc.localMicrophoneLevel).frame(width: 42).help("Local microphone level; audio is not recorded by the meter")
+                        }
                         Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { show("share") } }
                         if rtc.isSharing {
                             Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy)

@@ -2,6 +2,12 @@ import XCTest
 @testable import PairDesk
 
 final class AppTests: XCTestCase {
+    func testMicrophoneMeterIsSilentForEmptyAndClampsRMS() {
+        XCTAssertEqual(AudioMeter.level(samples: []), 0)
+        XCTAssertEqual(AudioMeter.level(samples: [0, 0, 0]), 0)
+        XCTAssertEqual(AudioMeter.level(samples: [0.5, -0.5]), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(AudioMeter.level(samples: [2, -2]), 1)
+    }
     func testPrivateTokensRequireHTTPSOutsideLoopback() throws {
         XCTAssertThrowsError(try APIClient(server: "http://192.168.1.1:8080"))
         XCTAssertThrowsError(try APIClient(server: "https://user:secret@example.com"))
