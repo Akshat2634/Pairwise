@@ -17,6 +17,9 @@ final class AppStore: ObservableObject {
     @Published var error: String?
     @Published var directoryStatus = "Connecting…"
     @Published var serverAddress = UserDefaults.standard.string(forKey: "serverAddress") ?? (Bundle.main.object(forInfoDictionaryKey: "PairDeskServerURL") as? String) ?? "http://127.0.0.1:18080"
+    @Published var startCallsMuted = UserDefaults.standard.bool(forKey: "startCallsMuted") {
+        didSet { UserDefaults.standard.set(startCallsMuted, forKey: "startCallsMuted") }
+    }
     let rtc = RTCService()
     let transcripts = WhisperTranscriber()
     private var subscriptions = Set<AnyCancellable>()
@@ -209,8 +212,10 @@ final class AppStore: ObservableObject {
                     callMessage = "\(invitation.target.name) accepted your call."
                     if autoVoiceCallID == invitation.id {
                         autoVoiceCallID = nil
-                        do { try await rtc.setMicrophoneEnabled(true) }
-                        catch { self.error = error.localizedDescription }
+                        if !startCallsMuted {
+                            do { try await rtc.setMicrophoneEnabled(true) }
+                            catch { self.error = error.localizedDescription }
+                        }
                     }
                 } else if ["declined", "expired", "cancelled"].contains(invitation.status) {
                     callMessage = invitation.status == "declined" ? "\(invitation.target.name) declined the call." : "Call to \(invitation.target.name) ended unanswered."
@@ -241,11 +246,12 @@ final class AppStore: ObservableObject {
             }
             await refreshInvitations()
             if autoVoiceCallID == response.call.id, activeRoom?.id == response.call.room.id,
-               callInvitations.contains(where: { $0.room.id == response.call.room.id && $0.status == "accepted" }),
-               !rtc.isMicrophoneEnabled {
+               callInvitations.contains(where: { $0.room.id == response.call.room.id && $0.status == "accepted" }) {
                 autoVoiceCallID = nil
-                do { try await rtc.setMicrophoneEnabled(true) }
-                catch { self.error = error.localizedDescription }
+                if !startCallsMuted && !rtc.isMicrophoneEnabled {
+                    do { try await rtc.setMicrophoneEnabled(true) }
+                    catch { self.error = error.localizedDescription }
+                }
             }
         } catch { self.error = error.localizedDescription }
     }
@@ -257,7 +263,7 @@ final class AppStore: ObservableObject {
         do {
             let response: CallResponse = try await api.post("v1/calls/\(invitation.id)/accept", body: EmptyBody())
             await joinInternal(response.call.room)
-            if activeRoom != nil { try await rtc.setMicrophoneEnabled(true) }
+            if activeRoom != nil && !startCallsMuted { try await rtc.setMicrophoneEnabled(true) }
         } catch { self.error = error.localizedDescription }
         await refreshInvitations()
     }

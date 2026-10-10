@@ -22,6 +22,7 @@ struct MenuBarPanel: View {
                     Button("Permissions…") { show("permissions") }
                     if store.user != nil { Button("Account settings…") { show("account") } }
                     Toggle("Start at login", isOn: Binding(get: { loginItem.enabled }, set: { loginItem.setEnabled($0) }))
+                    Toggle("Start calls muted", isOn: $store.startCallsMuted)
                     if loginItem.needsApproval { Button("Approve automatic startup…") { loginItem.openSettings() } }
                     Divider()
                     Button("Quit PairDesk") { NSApp.terminate(nil) }
@@ -61,6 +62,7 @@ struct MenuBarPanel: View {
                         }
                         Menu {
                             Section("Microphone") {
+                                if rtc.savedAudioInputUnavailable { Text("Saved microphone unavailable; using system default") }
                                 if rtc.audioInputDevices.isEmpty { Text("No microphones found") }
                                 ForEach(rtc.audioInputDevices) { device in
                                     Button { rtc.selectAudioInput(device.deviceId) } label: {
@@ -69,6 +71,7 @@ struct MenuBarPanel: View {
                                 }
                             }
                             Section("Speaker") {
+                                if rtc.savedAudioOutputUnavailable { Text("Saved speaker unavailable; using system default") }
                                 if rtc.audioOutputDevices.isEmpty { Text("System default") }
                                 ForEach(rtc.audioOutputDevices) { device in
                                     Button { rtc.selectAudioOutput(device.deviceId) } label: {

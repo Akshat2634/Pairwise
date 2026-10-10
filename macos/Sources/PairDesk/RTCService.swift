@@ -43,6 +43,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var audioOutputDevices: [AudioDevice] = []
     @Published private(set) var selectedAudioInputID = ""
     @Published private(set) var selectedAudioOutputID = ""
+    @Published private(set) var savedAudioInputUnavailable = false
+    @Published private(set) var savedAudioOutputUnavailable = false
     @Published private(set) var localMicrophoneLevel = 0.0
 
     /// Called for captured local microphone and subscribed remote audio tracks.
@@ -217,6 +219,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         guard let device = AudioManager.shared.inputDevices.first(where: { $0.deviceId == deviceID }) else { return }
         AudioManager.shared.inputDevice = device
         selectedAudioInputID = device.deviceId
+        UserDefaults.standard.set(device.deviceId, forKey: "audioInputDeviceID")
+        savedAudioInputUnavailable = false
         audioInputDevices = AudioManager.shared.inputDevices
     }
 
@@ -224,12 +228,32 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         guard let device = AudioManager.shared.outputDevices.first(where: { $0.deviceId == deviceID }) else { return }
         AudioManager.shared.outputDevice = device
         selectedAudioOutputID = device.deviceId
+        UserDefaults.standard.set(device.deviceId, forKey: "audioOutputDeviceID")
+        savedAudioOutputUnavailable = false
         audioOutputDevices = AudioManager.shared.outputDevices
     }
 
     private func refreshAudioDevices(using manager: AudioManager = .shared) {
-        audioInputDevices = manager.inputDevices
-        audioOutputDevices = manager.outputDevices
+        let inputs = manager.inputDevices
+        let outputs = manager.outputDevices
+        if let savedID = UserDefaults.standard.string(forKey: "audioInputDeviceID") {
+            if let savedDevice = inputs.first(where: { $0.deviceId == savedID }) {
+                if manager.inputDevice.deviceId != savedID { manager.inputDevice = savedDevice }
+                savedAudioInputUnavailable = false
+            } else {
+                savedAudioInputUnavailable = true
+            }
+        }
+        if let savedID = UserDefaults.standard.string(forKey: "audioOutputDeviceID") {
+            if let savedDevice = outputs.first(where: { $0.deviceId == savedID }) {
+                if manager.outputDevice.deviceId != savedID { manager.outputDevice = savedDevice }
+                savedAudioOutputUnavailable = false
+            } else {
+                savedAudioOutputUnavailable = true
+            }
+        }
+        audioInputDevices = inputs
+        audioOutputDevices = outputs
         selectedAudioInputID = manager.inputDevice.deviceId
         selectedAudioOutputID = manager.outputDevice.deviceId
     }
