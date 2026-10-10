@@ -19,13 +19,13 @@ PairDesk — internal macOS pairing app
 4. PairDesk registers automatic startup at first launch from Applications.
    You can turn Start at login off using its menu-bar menu or Account settings.
    macOS may require approval in System Settings > General > Login Items.
-5. For calls, allow microphone access when requested. For screen sharing,
-   allow Screen Recording. To host remote control, allow Accessibility.
-   These permissions are controlled by macOS and cannot be granted by this installer.
+5. For calls, allow microphone access when requested. To share, choose a
+   display in the macOS screen-sharing picker; no Screen Recording setting is
+   needed. To let teammates control your Mac, enable PairDesk in Accessibility.
 6. PairDesk lives in the top-right menu bar. Click its icon to call an online
    teammate; they accept. Click another available teammate to add them.
-   Share screen opens a source picker. A shared display allows call participants
-   to control it automatically; window sharing is viewing only.
+   Share screen opens Apple's system picker. A shared display allows call
+   participants to control it when Accessibility access is enabled.
    Stop control in the menu bar or press Control+Option+Escape.
    Permissions setup in the gear menu opens the relevant macOS Settings pages.
    A remote screen opens a large viewer with a Full screen button.
