@@ -10,6 +10,8 @@ The current client supports macOS 14 and later. It is an early-stage project; te
 
 **Download the complete source:** [ZIP archive of the latest `main` branch](https://github.com/EvAlssment/Pairwise/archive/refs/heads/main.zip) · [browse the repository](https://github.com/EvAlssment/Pairwise)
 
+**Download the [Pairwise 0.3.6 test DMG](https://github.com/EvAlssment/Pairwise/releases/download/pairwise-test-0.3.6/PairDesk-0.3.6-test.dmg)** · [checksum](https://github.com/EvAlssment/Pairwise/releases/download/pairwise-test-0.3.6/PairDesk-0.3.6-test.dmg.sha256). This Apple Silicon development build is ad-hoc signed and not notarized; Gatekeeper rejects it. Do not bypass Gatekeeper to install it. Wait for a signed and notarized release for normal use.
+
 Installable macOS builds will be published under [GitHub Releases](https://github.com/EvAlssment/Pairwise/releases) once the release signing credentials are configured. See [the release guide](docs/releasing.md).
 
 The ZIP contains the tracked source code and documentation. It is not an installable app; follow the build steps below to create a local macOS build. Whisper source and model files are downloaded separately by the preparation script and are not included in the repository.
