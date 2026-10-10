@@ -1,0 +1,271 @@
+import SwiftUI
+import AppKit
+import LiveKit
+
+private enum Palette {
+    static let background = Color(red: 0.055, green: 0.065, blue: 0.08)
+    static let panel = Color(red: 0.085, green: 0.10, blue: 0.12)
+    static let card = Color(red: 0.12, green: 0.14, blue: 0.16)
+    static let accent = Color(red: 0.48, green: 0.92, blue: 0.76)
+    static let muted = Color(red: 0.55, green: 0.62, blue: 0.65)
+}
+
+struct RootView: View {
+    @ObservedObject var store: AppStore
+    var body: some View {
+        Group {
+            if store.user == nil { LoginView(store: store) }
+            else { WorkspaceView(store: store, rtc: store.rtc, transcripts: store.transcripts) }
+        }
+        .tint(Palette.accent)
+        .background(Palette.background)
+        .alert("PairDesk", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
+            Button("OK") { store.error = nil }
+        } message: { Text(store.error ?? "") }
+    }
+}
+
+private struct LoginView: View {
+    @ObservedObject var store: AppStore
+    @State private var email = ""
+    @State private var password = ""
+    @State private var serverExpanded = false
+    @FocusState private var focused: Bool
+    var body: some View {
+        HStack(spacing: 80) {
+            VStack(alignment: .leading, spacing: 24) {
+                Logo(size: 62)
+                Text("Work together.\nFrom your Mac.").font(.system(size: 46, weight: .semibold, design: .rounded)).lineSpacing(4)
+                Text("A clear screen. A familiar voice.\nYour team's own space to pair.")
+                    .font(.system(size: 19)).foregroundStyle(Palette.muted).lineSpacing(6)
+                HStack(spacing: 18) {
+                    Label("Voice", systemImage: "waveform")
+                    Label("Screen", systemImage: "display")
+                    Label("Control", systemImage: "cursorarrow")
+                }.font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.top, 16)
+            }.frame(maxWidth: 430, alignment: .leading)
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Welcome to PairDesk").font(.system(size: 25, weight: .semibold))
+                Text("Sign in with the account your team created.").foregroundStyle(Palette.muted).font(.system(size: 13))
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("EMAIL").font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.muted)
+                    TextField("you@team.com", text: $email).textFieldStyle(.roundedBorder).focused($focused)
+                }.padding(.top, 12)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("PASSWORD").font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.muted)
+                    SecureField("Your password", text: $password).textFieldStyle(.roundedBorder)
+                }
+                Button {
+                    let submitted = password
+                    password = ""
+                    Task { await store.login(email: email, password: submitted) }
+                } label: {
+                    HStack { Spacer(); if store.busy { ProgressView().controlSize(.small) } else { Text("Sign in").fontWeight(.semibold); Image(systemName: "arrow.right") }; Spacer() }
+                        .padding(.vertical, 10)
+                }.buttonStyle(.borderedProminent).disabled(store.busy || email.isEmpty || password.isEmpty)
+                    .keyboardShortcut(.defaultAction)
+                DisclosureGroup("Server address", isExpanded: $serverExpanded) {
+                    TextField("https://pair.yourteam.com", text: $store.serverAddress).textFieldStyle(.roundedBorder).padding(.top, 8)
+                }.font(.system(size: 12)).foregroundStyle(Palette.muted).disabled(store.busy)
+                Text("Need an account or password reset? Ask your team administrator.")
+                    .font(.system(size: 11)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
+            }.padding(32).frame(width: 360).background(Palette.panel, in: RoundedRectangle(cornerRadius: 20))
+        }.padding(60).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear { focused = true }
+    }
+}
+
+struct SharedScreenWindow: View {
+    @ObservedObject var store: AppStore
+    @ObservedObject var rtc: RTCService
+    @ObservedObject var transcripts: WhisperTranscriber
+    @State private var showTranscript = false
+    @State private var permissions = false
+    @State private var sourcePicker = false
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                Text(rtc.participants.filter { !$0.isLocal }.map(\.name).joined(separator: ", ")).font(.headline).lineLimit(1)
+                Spacer()
+                Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Image(systemName: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
+                Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { sourcePicker = true } }
+                Button { showTranscript.toggle() } label: { Image(systemName: "text.bubble") }.help("Local transcript")
+                Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
+                Button("Hang up") { Task { await store.leave() } }.tint(.red)
+            }.buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 9)
+            HStack(spacing: 0) {
+                ZStack {
+                    Color.black
+                    if let track = rtc.screenTrack, !rtc.isSharing {
+                        InteractiveScreenView(track: track, rtc: rtc).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        VStack(spacing: 16) {
+                            Image(systemName: rtc.isSharing ? "display.and.arrow.up" : "phone").font(.system(size: 44))
+                            Text(rtc.isSharing ? "Your screen is shared" : (store.activeRoom == nil ? "Call ended" : "Voice call connected"))
+                            Text(rtc.isSharing ? "Your teammates can control your shared display. Use the menu bar to stop control." : "Call controls and your team are in the PairDesk menu bar.").font(.caption).foregroundStyle(.secondary)
+                        }.padding(30)
+                    }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                if showTranscript { TranscriptPanel(transcriber: transcripts, rtc: rtc).frame(width: 275) }
+            }
+            if let error = rtc.error { HStack { Text(error).font(.caption).foregroundStyle(.orange); Spacer(); Button("Permissions") { permissions = true } }.padding(8) }
+        }.background(Palette.background).tint(Palette.accent)
+        .sheet(isPresented: $permissions) { PermissionsView() }
+        .sheet(isPresented: $sourcePicker) { ScreenSharePickerView(store: store) }
+        .alert("PairDesk", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
+    }
+}
+
+struct ScreenSharePickerView: View {
+    @ObservedObject var store: AppStore
+    @ObservedObject private var screenPermission = PermissionManager.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var permissions = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Share your screen").font(.title2.bold())
+            Text("Choose a display in the macOS picker. PairDesk receives access only to that display for this sharing session; Screen Recording permission is not required.").font(.callout).foregroundStyle(.secondary)
+            Label("Remote mouse and keyboard control needs Accessibility access on the Mac being shared. Screen sharing still works without it.", systemImage: "cursorarrow.motionlines")
+                .font(.caption).foregroundStyle(.secondary)
+            if !screenPermission.accessibility {
+                Button("Set up remote control") { screenPermission.requestAccessibility() }
+            }
+            Spacer()
+            HStack { Button("Permissions") { permissions = true }; Spacer(); Button("Cancel") { dismiss() }; Button("Choose display…") { beginSharing() }.buttonStyle(.borderedProminent).disabled(store.busy) }
+        }.padding(26).frame(width: 560)
+        .task { screenPermission.refresh() }
+        .sheet(isPresented: $permissions) { PermissionsView() }
+    }
+
+    private func beginSharing() {
+        dismiss()
+        Task { await store.shareScreen() }
+    }
+}
+
+struct WorkspaceView: View {
+    @ObservedObject var store: AppStore
+    @ObservedObject var rtc: RTCService
+    @ObservedObject var transcripts: WhisperTranscriber
+    @State private var account = false
+    @State private var permissions = false
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "rectangle.on.rectangle").font(.system(size: 46))
+            Text("PairDesk lives in your menu bar").font(.title2.bold())
+            Text("Click its icon at the top right of your screen to call a teammate, share a display, or manage a call.").multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 440)
+            HStack { Button("Permissions") { permissions = true }; Button("Account settings") { account = true } }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $account) { AccountView(store: store) }
+        .sheet(isPresented: $permissions) { PermissionsView() }
+    }
+}
+
+private struct TranscriptPanel: View {
+    @ObservedObject var transcriber: WhisperTranscriber
+    @ObservedObject var rtc: RTCService
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack { Text("Local transcript").font(.system(size: 14, weight: .semibold)); Spacer(); Image(systemName: "lock").font(.system(size: 11)).foregroundStyle(Palette.accent) }
+            Toggle("Transcribe on this Mac", isOn: Binding(get: { transcriber.enabled }, set: {
+                transcriber.setEnabled($0)
+                rtc.setAudioForwardingConsented(transcriber.enabled)
+            })).toggleStyle(.switch).font(.system(size: 11))
+            Text(transcriber.status).font(.system(size: 10)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 18) {
+                        if transcriber.segments.isEmpty { Text("Speech will appear here when transcription is on. Tiny is fast, but may miss technical words.").font(.system(size: 12)).foregroundStyle(Palette.muted).padding(.top, 20) }
+                        ForEach(transcriber.segments) { segment in
+                            VStack(alignment: .leading, spacing: 5) { HStack { Text(segment.speakerName).font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.accent); Spacer(); Text(segment.createdAt, style: .time).font(.system(size: 9)).foregroundStyle(Palette.muted) }; Text(segment.text).font(.system(size: 12)).textSelection(.enabled).lineSpacing(3) }.id(segment.id)
+                        }
+                    }
+                }.onChange(of: transcriber.segments.count) { _, _ in if let id = transcriber.segments.last?.id { proxy.scrollTo(id, anchor: .bottom) } }
+            }
+            HStack { Button("Clear") { transcriber.clear() }.buttonStyle(.plain); Spacer(); Button("Export text") { export() }.buttonStyle(.plain).disabled(transcriber.segments.isEmpty) }.font(.system(size: 11)).foregroundStyle(Palette.muted)
+            Text("No upload. Not saved automatically.").font(.system(size: 9)).foregroundStyle(Palette.muted)
+        }.padding(20)
+    }
+    private func export() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "pairdesk-transcript.txt"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let text = transcriber.segments.map { "[\($0.createdAt.formatted(date: .omitted, time: .standard))] \($0.speakerName): \($0.text)" }.joined(separator: "\n\n")
+        do { try text.write(to: url, atomically: true, encoding: .utf8) }
+        catch { NSAlert(error: error).runModal() }
+    }
+}
+
+struct AccountView: View {
+    @EnvironmentObject private var loginItem: LoginItemManager
+    @ObservedObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var current = ""
+    @State private var newPassword = ""
+    @State private var confirmation = ""
+    @State private var saving = false
+    @State private var addingMember = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(store.user?.name ?? "Account").font(.title2.bold())
+            Text(store.user?.email ?? "").foregroundStyle(.secondary)
+            if store.user?.admin == true {
+                Button("Create a team account") { addingMember = true }.buttonStyle(.bordered)
+            }
+            Divider()
+            Toggle("Start PairDesk at login", isOn: Binding(get: { loginItem.enabled }, set: { loginItem.setEnabled($0) }))
+            if let message = loginItem.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+            if loginItem.needsApproval { Button("Open Login Items settings") { loginItem.openSettings() } }
+            Divider()
+            Text("Change password").font(.headline)
+            SecureField("Current password", text: $current).textFieldStyle(.roundedBorder)
+            SecureField("New password (at least 12 characters)", text: $newPassword).textFieldStyle(.roundedBorder)
+            SecureField("Confirm new password", text: $confirmation).textFieldStyle(.roundedBorder)
+            HStack { Button("Sign out") { dismiss(); Task { await store.logout() } }.disabled(store.busy || saving); Spacer(); Button("Close") { dismiss() }; Button(saving ? "Saving…" : "Save password") { saving = true; Task { let success = await store.changePassword(current: current, new: newPassword); saving = false; if success { dismiss() } } }.buttonStyle(.borderedProminent).disabled(saving || current.isEmpty || newPassword.count < 12 || newPassword != confirmation) }
+        }.padding(30).frame(width: 430)
+            .sheet(isPresented: $addingMember) { CreateMemberView(store: store) }
+    }
+}
+
+private struct CreateMemberView: View {
+    @ObservedObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var email = ""
+    @State private var password = ""
+    @State private var saving = false
+    @State private var error: String?
+    @State private var created = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Create a team account").font(.title2.bold())
+            Text("Give your teammate their email and initial password directly. They can change the password after signing in.").font(.system(size: 12)).foregroundStyle(.secondary)
+            TextField("Full name", text: $name).textFieldStyle(.roundedBorder)
+            TextField("Email", text: $email).textFieldStyle(.roundedBorder)
+            SecureField("Initial password (12+ characters)", text: $password).textFieldStyle(.roundedBorder)
+            if let error { Text(error).foregroundStyle(.orange).font(.system(size: 12)) }
+            if created { Label("Account created", systemImage: "checkmark.circle.fill").foregroundStyle(Palette.accent) }
+            HStack { Spacer(); Button("Close") { dismiss() }; Button(saving ? "Creating…" : "Create account") {
+                saving = true
+                error = nil
+                Task {
+                    do { try await store.createMember(name: name, email: email, password: password); password = ""; created = true }
+                    catch { self.error = error.localizedDescription }
+                    saving = false
+                }
+            }.buttonStyle(.borderedProminent).disabled(saving || name.trimmingCharacters(in: .whitespaces).isEmpty || email.isEmpty || password.count < 12) }
+        }.padding(30).frame(width: 430)
+    }
+}
+
+private struct Logo: View {
+    let size: CGFloat
+    var body: some View { Image(systemName: "rectangle.on.rectangle.angled").font(.system(size: size * 0.53, weight: .medium)).foregroundStyle(Palette.accent).frame(width: size, height: size).background(Palette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.26)) }
+}
+private struct Avatar: View {
+    let initials: String
+    let size: CGFloat
+    var body: some View { Text(initials).font(.system(size: size * 0.33, weight: .semibold)).foregroundStyle(Palette.accent).frame(width: size, height: size).background(Palette.accent.opacity(0.12), in: Circle()) }
+}

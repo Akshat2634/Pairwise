@@ -1,0 +1,145 @@
+import Foundation
+import XCTest
+import CoreVideo
+@preconcurrency import LiveKit
+@testable import PairDesk
+
+final class CallIntegrationTests: XCTestCase {
+    @MainActor
+    func testFourNativeClientsAndExclusiveScreenPermission() async throws {
+        guard let address = ProcessInfo.processInfo.environment["PAIRDESK_TEST_API"],
+              let password = ProcessInfo.processInfo.environment["PAIRDESK_TEST_PASSWORD"] else {
+            throw XCTSkip("Run scripts/test-call.sh for isolated LiveKit integration")
+        }
+        struct LoginBody: Encodable { let email: String; let password: String }
+        struct RoomBody: Encodable { let name: String }
+        struct ShareBody: Encodable { let enabled: Bool }
+        let unsigned = try APIClient(server: address)
+        var clients: [APIClient] = []
+        for i in 1...5 {
+            let result: LoginResponse = try await unsigned.post("v1/login", body: LoginBody(email: "integration-\(i)@pairdesk.invalid", password: password))
+            clients.append(try APIClient(server: address, token: result.token))
+        }
+        let response: RoomResponse = try await clients[0].post("v1/rooms", body: RoomBody(name: "Native integration fixture"))
+        let roomID = response.room.id
+        var media: [Room] = []
+        var frameTask: Task<Void, Never>?
+        defer { frameTask?.cancel() }
+        let receiver = DataReceiver(expectation: expectation(description: "Authenticated RTC data delivered"))
+        do {
+            for i in 0..<4 {
+                for client in clients.prefix(i) { try await client.send("v1/rooms/\(roomID)/heartbeat", body: EmptyBody()) }
+                let join: JoinResponse = try await clients[i].post("v1/rooms/\(roomID)/join", body: EmptyBody())
+                let room = Room(delegate: i == 1 ? receiver : nil)
+                media.append(room)
+                let relayOnly = ProcessInfo.processInfo.environment["PAIRDESK_TEST_RELAY_ONLY"] == "1"
+                try await room.connect(url: join.url, token: join.token, connectOptions: ConnectOptions(iceTransportPolicy: relayOnly ? .relay : .all))
+                XCTAssertEqual(room.connectionState, .connected)
+                XCTAssertEqual(room.localParticipant.identity?.stringValue, join.participantIdentity)
+            }
+            for client in clients.prefix(4) { try await client.send("v1/rooms/\(roomID)/heartbeat", body: EmptyBody()) }
+            for _ in 0..<100 {
+                if media[0].remoteParticipants.count == 3 { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            XCTAssertEqual(media[0].remoteParticipants.count, 3)
+            let payload = Data("pairdesk-integration".utf8)
+            try await media[0].localParticipant.publish(data: payload, options: DataPublishOptions(topic: "pairdesk.test", reliable: true))
+            await fulfillment(of: [receiver.expectation], timeout: 10)
+            XCTAssertEqual(receiver.received, payload)
+            XCTAssertEqual(receiver.sender, media[0].localParticipant.identity?.stringValue)
+            do {
+                let _: JoinResponse = try await clients[4].post("v1/rooms/\(roomID)/join", body: EmptyBody())
+                XCTFail("A fifth member was admitted")
+            } catch let error as APIError { XCTAssertEqual(error.status, 409) }
+            try await clients[0].send("v1/rooms/\(roomID)/share", body: ShareBody(enabled: true))
+            try await Task.sleep(for: .milliseconds(500))
+            XCTAssertTrue(media[0].localParticipant.permissions.canPublishSources.contains(Track.Source.screenShareVideo.rawValue))
+            XCTAssertFalse(media[0].localParticipant.permissions.canPublishSources.contains(Track.Source.camera.rawValue))
+            XCTAssertFalse(media[0].localParticipant.permissions.canPublishSources.contains(Track.Source.screenShareAudio.rawValue))
+            let videoReceiver = SyntheticVideoReceiver(expectation: expectation(description: "Synthetic screen frame delivered"))
+            media[1].add(delegate: videoReceiver)
+            let track = await LocalVideoTrack.createBufferTrack(name: "pairdesk.screen.fixture", source: .screenShareVideo)
+            let capturer = try XCTUnwrap(track.capturer as? BufferCapturer)
+            let pixel = try syntheticPixelBuffer()
+            capturer.capture(pixel)
+            frameTask = Task {
+                while !Task.isCancelled {
+                    capturer.capture(pixel)
+                    try? await Task.sleep(for: .milliseconds(66))
+                }
+            }
+            let publication = try await media[0].localParticipant.publish(videoTrack: track, options: VideoPublishOptions(simulcast: false))
+            await fulfillment(of: [videoReceiver.expectation], timeout: 15)
+            XCTAssertTrue(videoReceiver.receivedFrame)
+            frameTask?.cancel()
+            try await media[0].localParticipant.unpublish(publication: publication)
+            do {
+                try await clients[1].send("v1/rooms/\(roomID)/share", body: ShareBody(enabled: true))
+                XCTFail("A second sharer was admitted")
+            } catch let error as APIError { XCTAssertEqual(error.status, 409) }
+            try await clients[0].send("v1/rooms/\(roomID)/share", body: ShareBody(enabled: false))
+            try await clients[1].send("v1/rooms/\(roomID)/share", body: ShareBody(enabled: true))
+            try await clients[1].send("v1/rooms/\(roomID)/share", body: ShareBody(enabled: false))
+        } catch {
+            for room in media { await room.disconnect() }
+            for client in clients { try? await client.send("v1/rooms/\(roomID)/leave", body: EmptyBody()) }
+            throw error
+        }
+        for room in media { await room.disconnect() }
+        for client in clients { try? await client.send("v1/rooms/\(roomID)/leave", body: EmptyBody()) }
+    }
+
+    private func syntheticPixelBuffer() throws -> CVPixelBuffer {
+        var buffer: CVPixelBuffer?
+        let result = CVPixelBufferCreate(kCFAllocatorDefault, 640, 480, kCVPixelFormatType_32BGRA,
+                                        [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buffer)
+        XCTAssertEqual(result, kCVReturnSuccess)
+        let pixel = try XCTUnwrap(buffer)
+        CVPixelBufferLockBaseAddress(pixel, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixel, []) }
+        let bytes = try XCTUnwrap(CVPixelBufferGetBaseAddress(pixel))
+        memset(bytes, 128, CVPixelBufferGetBytesPerRow(pixel) * CVPixelBufferGetHeight(pixel))
+        return pixel
+    }
+}
+
+private final class SyntheticVideoReceiver: NSObject, RoomDelegate, VideoRenderer, @unchecked Sendable {
+    let expectation: XCTestExpectation
+    private let lock = NSLock()
+    private var didReceive = false
+    var receivedFrame: Bool { lock.lock(); defer { lock.unlock() }; return didReceive }
+    @MainActor var isAdaptiveStreamEnabled: Bool { false }
+    @MainActor var adaptiveStreamSize: CGSize { CGSize(width: 640, height: 480) }
+    init(expectation: XCTestExpectation) { self.expectation = expectation }
+    func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
+        guard let track = publication.track as? RemoteVideoTrack, track.source == .screenShareVideo else { return }
+        track.add(videoRenderer: self)
+    }
+    func render(frame: VideoFrame) {
+        lock.lock()
+        guard !didReceive else { lock.unlock(); return }
+        didReceive = true
+        lock.unlock()
+        expectation.fulfill()
+    }
+}
+
+private final class DataReceiver: RoomDelegate, @unchecked Sendable {
+    let expectation: XCTestExpectation
+    private let lock = NSLock()
+    private var storedData: Data?
+    private var storedSender: String?
+    var received: Data? { lock.lock(); defer { lock.unlock() }; return storedData }
+    var sender: String? { lock.lock(); defer { lock.unlock() }; return storedSender }
+    init(expectation: XCTestExpectation) { self.expectation = expectation }
+    func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data, forTopic topic: String, encryptionType: EncryptionType) {
+        guard topic == "pairdesk.test", let participant else { return }
+        lock.lock()
+        guard storedData == nil else { lock.unlock(); return }
+        storedData = data
+        storedSender = participant.identity?.stringValue
+        lock.unlock()
+        expectation.fulfill()
+    }
+}
