@@ -46,6 +46,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var savedAudioInputUnavailable = false
     @Published private(set) var savedAudioOutputUnavailable = false
     @Published private(set) var localMicrophoneLevel = 0.0
+    @Published private(set) var screenNetworkQuality: ScreenNetworkQuality = .measuring
 
     /// Called for captured local microphone and subscribed remote audio tracks.
     /// Buffers are copied to normalized Float samples before delivery. It remains
@@ -256,6 +257,18 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         audioOutputDevices = outputs
         selectedAudioInputID = manager.inputDevice.deviceId
         selectedAudioOutputID = manager.outputDevice.deviceId
+    }
+
+    func refreshScreenNetworkQuality() {
+        guard let statistics = screenTrack?.statistics else {
+            screenNetworkQuality = .measuring
+            return
+        }
+        let roundTripTime = statistics.iceCandidatePair
+            .filter { $0.state == .succeeded && $0.nominated != false }
+            .compactMap(\.currentRoundTripTime)
+            .min()
+        screenNetworkQuality = .from(roundTripTimeSeconds: roundTripTime)
     }
 
     /// Audio leaves the SDK renderer only after an explicit local transcription opt-in.

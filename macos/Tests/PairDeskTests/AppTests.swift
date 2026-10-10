@@ -8,6 +8,13 @@ final class AppTests: XCTestCase {
         XCTAssertEqual(AudioMeter.level(samples: [0.5, -0.5]), 0.5, accuracy: 0.0001)
         XCTAssertEqual(AudioMeter.level(samples: [2, -2]), 1)
     }
+    func testScreenNetworkQualityUsesMeasuredRTTAndHandlesMissingStats() {
+        XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: nil), .measuring)
+        XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: .nan), .measuring)
+        XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: 0.08), .good(roundTripMilliseconds: 80))
+        XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: 0.151), .fair(roundTripMilliseconds: 151))
+        XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: 0.301), .highLatency(roundTripMilliseconds: 301))
+    }
     func testPrivateTokensRequireHTTPSOutsideLoopback() throws {
         XCTAssertThrowsError(try APIClient(server: "http://192.168.1.1:8080"))
         XCTAssertThrowsError(try APIClient(server: "https://user:secret@example.com"))

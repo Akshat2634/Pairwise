@@ -107,6 +107,11 @@ struct SharedScreenWindow: View {
                     Label(shareStatus, systemImage: rtc.controlState.isGranted ? "cursorarrow.motionlines" : "display")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
+                if rtc.screenTrack != nil && !rtc.isSharing {
+                    Label(rtc.screenNetworkQuality.label, systemImage: "waveform.path")
+                        .font(.caption).foregroundStyle(networkQualityColor).lineLimit(1)
+                        .help("Estimated shared-screen network round-trip time. This does not measure image readability or local CPU load.")
+                }
                 Spacer()
                 Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Image(systemName: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
                 Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { sourcePicker = true } }
@@ -153,6 +158,12 @@ struct SharedScreenWindow: View {
             }
             if let error = rtc.error { HStack { Text(error).font(.caption).foregroundStyle(.orange); Spacer(); Button("Permissions") { permissions = true } }.padding(8) }
         }.background(Palette.background).tint(Palette.accent)
+        .task {
+            while !Task.isCancelled {
+                rtc.refreshScreenNetworkQuality()
+                do { try await Task.sleep(for: .seconds(1)) } catch { break }
+            }
+        }
         .sheet(isPresented: $permissions) { PermissionsView() }
         .sheet(isPresented: $sourcePicker) { ScreenSharePickerView(store: store) }
         .alert("PairDesk", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
@@ -161,6 +172,15 @@ struct SharedScreenWindow: View {
     private func cursorColor(for identity: String) -> Color {
         let value = identity.utf8.reduce(UInt64(2_166_136_261)) { ($0 ^ UInt64($1)) &* 16_777_619 }
         return Color(hue: Double(value % 360) / 360, saturation: 0.78, brightness: 0.96)
+    }
+
+    private var networkQualityColor: Color {
+        switch rtc.screenNetworkQuality {
+        case .measuring: .secondary
+        case .good: .green
+        case .fair: .orange
+        case .highLatency: .red
+        }
     }
 }
 
