@@ -39,6 +39,10 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var automaticControlEnabled = false
     @Published private(set) var remotePointers: [RemotePointer] = []
     @Published private(set) var localIdentity: String?
+    @Published private(set) var audioInputDevices: [AudioDevice] = []
+    @Published private(set) var audioOutputDevices: [AudioDevice] = []
+    @Published private(set) var selectedAudioInputID = ""
+    @Published private(set) var selectedAudioOutputID = ""
 
     /// Called for captured local microphone and subscribed remote audio tracks.
     /// Buffers are copied to normalized Float samples before delivery. It remains
@@ -83,6 +87,10 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
 
     override init() {
         super.init()
+        AudioManager.shared.onDeviceUpdate = { [weak self] manager in
+            Task { @MainActor [weak self] in self?.refreshAudioDevices(using: manager) }
+        }
+        refreshAudioDevices()
         inputMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != RemoteInputInjector.eventMarker else { return }
             Task { @MainActor [weak self] in self?.handleLocalInput(event) }
@@ -139,6 +147,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             }
             localIdentity = newRoom.localParticipant.identity?.stringValue ?? identity
             connected = true
+            refreshAudioDevices()
             status = "Connected as \(name)"
             refreshParticipants()
             refreshSharer()
@@ -200,6 +209,27 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             self.error = "Microphone could not be \(enabled ? "enabled" : "disabled"): \(error.localizedDescription)"
             throw error
         }
+    }
+
+    func selectAudioInput(_ deviceID: String) {
+        guard let device = AudioManager.shared.inputDevices.first(where: { $0.deviceId == deviceID }) else { return }
+        AudioManager.shared.inputDevice = device
+        selectedAudioInputID = device.deviceId
+        audioInputDevices = AudioManager.shared.inputDevices
+    }
+
+    func selectAudioOutput(_ deviceID: String) {
+        guard let device = AudioManager.shared.outputDevices.first(where: { $0.deviceId == deviceID }) else { return }
+        AudioManager.shared.outputDevice = device
+        selectedAudioOutputID = device.deviceId
+        audioOutputDevices = AudioManager.shared.outputDevices
+    }
+
+    private func refreshAudioDevices(using manager: AudioManager = .shared) {
+        audioInputDevices = manager.inputDevices
+        audioOutputDevices = manager.outputDevices
+        selectedAudioInputID = manager.inputDevice.deviceId
+        selectedAudioOutputID = manager.outputDevice.deviceId
     }
 
     /// Audio leaves the SDK renderer only after an explicit local transcription opt-in.

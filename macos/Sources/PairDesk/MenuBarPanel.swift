@@ -53,6 +53,25 @@ struct MenuBarPanel: View {
                     HStack {
                         Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Label(rtc.isMicrophoneEnabled ? "Mute" : "Unmute", systemImage: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
                         Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { show("share") } }
+                        Menu {
+                            Section("Microphone") {
+                                if rtc.audioInputDevices.isEmpty { Text("No microphones found") }
+                                ForEach(rtc.audioInputDevices) { device in
+                                    Button { rtc.selectAudioInput(device.deviceId) } label: {
+                                        if rtc.selectedAudioInputID == device.deviceId { Label(device.name, systemImage: "checkmark") } else { Text(device.name) }
+                                    }
+                                }
+                            }
+                            Section("Speaker") {
+                                if rtc.audioOutputDevices.isEmpty { Text("System default") }
+                                ForEach(rtc.audioOutputDevices) { device in
+                                    Button { rtc.selectAudioOutput(device.deviceId) } label: {
+                                        if rtc.selectedAudioOutputID == device.deviceId { Label(device.name, systemImage: "checkmark") } else { Text(device.name) }
+                                    }
+                                }
+                            }
+                        } label: { Label("Audio", systemImage: "hifispeaker") }
+                        .help("Choose microphone and speaker")
                     }
                     if !permissions.microphone && !rtc.isMicrophoneEnabled {
                         Button("Microphone access needed to talk…") { show("permissions") }.font(.caption)
