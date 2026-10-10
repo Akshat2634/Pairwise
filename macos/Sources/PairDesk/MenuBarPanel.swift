@@ -37,9 +37,6 @@ struct MenuBarPanel: View {
                     Spacer()
                     Text("\(teammates.count)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
                 }
-                if !permissions.microphone || !permissions.accessibility {
-                    Button("Finish permission setup…") { show("permissions") }.font(.caption)
-                }
                 if let incoming = store.incomingCall {
                     Text("\(incoming.caller.name) is calling").bold()
                     HStack {
@@ -57,8 +54,17 @@ struct MenuBarPanel: View {
                         Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Label(rtc.isMicrophoneEnabled ? "Mute" : "Unmute", systemImage: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
                         Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { show("share") } }
                     }
+                    if !permissions.microphone && !rtc.isMicrophoneEnabled {
+                        Button("Microphone access needed to talk…") { show("permissions") }.font(.caption)
+                    }
                     if rtc.isSharing {
-                        Button(rtc.automaticControlEnabled ? "Stop control" : "Allow control again") { if rtc.automaticControlEnabled { rtc.pauseRemoteControl() } else { rtc.resumeRemoteControl() } }
+                        if rtc.remoteControlAvailable {
+                            Button(rtc.automaticControlEnabled ? "Stop control" : "Allow control again") { if rtc.automaticControlEnabled { rtc.pauseRemoteControl() } else { rtc.resumeRemoteControl() } }
+                        } else if !permissions.accessibility {
+                            Button("Set up remote control…") { show("permissions") }.font(.caption)
+                        } else {
+                            Text("Remote control unavailable for this share").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     HStack {
                         if rtc.screenTrack != nil && !rtc.isSharing { Button("Show shared screen") { show("screen") } }

@@ -1,7 +1,38 @@
 import AppKit
 import AVFoundation
 import ApplicationServices
+import Security
 import SwiftUI
+
+enum AppCopyLocation: Equatable {
+    case applications
+    case diskImage
+    case other(String)
+
+    static func classify(bundleURL: URL, homeDirectory: URL) -> AppCopyLocation {
+        let bundlePath = bundleURL.standardizedFileURL.path
+        if bundlePath.hasPrefix("/Volumes/") { return .diskImage }
+        let roots = [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            homeDirectory.appendingPathComponent("Applications", isDirectory: true)
+        ]
+        if roots.contains(where: { bundlePath.hasPrefix($0.standardizedFileURL.path + "/") }) {
+            return .applications
+        }
+        return .other(bundlePath)
+    }
+
+    var guidance: String {
+        switch self {
+        case .applications:
+            return "PairDesk is running from an Applications folder."
+        case .diskImage:
+            return "PairDesk is running from a mounted disk image. Drag it to Applications, eject the image, and open the Applications copy."
+        case .other(let path):
+            return "This copy is outside Applications: \(path). For normal team use, keep one copy in Applications and open that copy."
+        }
+    }
+}
 
 @MainActor
 final class PermissionManager: ObservableObject {
@@ -40,16 +71,39 @@ final class PermissionManager: ObservableObject {
 struct PermissionsView: View {
     @ObservedObject private var permissions = PermissionManager.shared
     @Environment(\.dismiss) private var dismiss
+    private var appCopyLocation: AppCopyLocation {
+        AppCopyLocation.classify(bundleURL: Bundle.main.bundleURL, homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+    }
+    private var signingSummary: String {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &code) == errSecSuccess,
+              let code else { return "Signature status unavailable" }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let values = information as? [String: Any] else { return "Signature status unavailable" }
+        let identifier = values[kSecCodeInfoIdentifier as String] as? String ?? Bundle.main.bundleIdentifier ?? "unknown"
+        if let team = values[kSecCodeInfoTeamIdentifier as String] as? String {
+            return "\(identifier) · Apple team \(team)"
+        }
+        return "\(identifier) · no Apple Developer team"
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Set up PairDesk").font(.title2.bold())
-            Text("Screen sharing uses the macOS picker and does not require Screen Recording permission. Microphone access is used only when you join voice. Accessibility access enables optional remote mouse and keyboard control.").foregroundStyle(.secondary)
-            row("Microphone", detail: "Talk with your teammates.", ready: permissions.microphone) { if permissions.microphone { permissions.open("Privacy_Microphone") } else { Task { await permissions.requestMicrophone() } } }
-            row("Control your Mac", detail: "Allow teammates to control your shared display. Enable PairDesk in the app permission list named Accessibility.", ready: permissions.accessibility) { if permissions.accessibility { permissions.open("Privacy_Accessibility") } else { permissions.requestAccessibility() } }
+            Text("Privacy and access").font(.title2.bold())
+            Text("Pairwise asks for access only when you use the related feature. You can call and view a teammate's screen without enabling remote control.").foregroundStyle(.secondary)
+            Label("Voice · Microphone access is needed to talk. You can still join and listen without it.", systemImage: permissions.microphone ? "checkmark.circle.fill" : "mic")
+                .font(.callout).foregroundStyle(permissions.microphone ? Color.green : Color.primary)
+            Label("Screen sharing · Choose a display in Apple's picker each time. No separate Screen Recording setting is needed.", systemImage: "display")
+                .font(.callout).foregroundStyle(.secondary)
+            Label("Remote control · Accessibility is optional and is needed only on the Mac being controlled.", systemImage: permissions.accessibility ? "checkmark.circle.fill" : "cursorarrow.motionlines")
+                .font(.callout).foregroundStyle(permissions.accessibility ? Color.green : Color.primary)
+            row("Microphone", detail: "Allow Pairwise to send your voice during a call.", ready: permissions.microphone) { if permissions.microphone { permissions.open("Privacy_Microphone") } else { Task { await permissions.requestMicrophone() } } }
+            row("Remote control", detail: "Allow a teammate to use mouse and keyboard while you share your display. You can stop control at any time.", ready: permissions.accessibility) { if permissions.accessibility { permissions.open("Privacy_Accessibility") } else { permissions.requestAccessibility() } }
             Text("Settings labels and placement vary by macOS version. If the Accessibility page does not open directly, search System Settings for ‘Accessibility’ and find the list of apps allowed to control your Mac.").font(.caption).foregroundStyle(.secondary)
-            Text("Stop remote control in the menu bar or press Control–Option–Escape at any time.").font(.caption)
-            Text("Running app: \(Bundle.main.bundleURL.path)").font(.caption).textSelection(.enabled)
-            Text("Ad-hoc signed test updates can require fresh permission approval. Use the installed copy in Applications; avoid running another copy from the disk image.").font(.caption).foregroundStyle(.secondary)
+            Text("Stop remote control in the menu bar or press Control–Option–Escape at any time. If you enable Accessibility while already sharing, stop and restart screen sharing to refresh control access.").font(.caption)
+            Text("App signature: \(signingSummary)").font(.caption.monospaced()).textSelection(.enabled)
+            Text(appCopyLocation.guidance).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            Text("Development builds are ad-hoc signed and may need fresh approval after an update. A stable Developer ID signed release is required for normal distribution.").font(.caption).foregroundStyle(.secondary)
             HStack { Button("Check again") { permissions.refresh() }; Spacer(); Button("Done") { PermissionWindowController.shared.close(); dismiss() } }
         }.padding(26).frame(width: 490)
         .task {

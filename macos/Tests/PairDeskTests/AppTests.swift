@@ -23,6 +23,13 @@ final class AppTests: XCTestCase {
         XCTAssertEqual(p?.y, 0)
         XCTAssertNil(ScreenCoordinateMapper.normalized(point: CGPoint(x: 100, y: 25), container: CGRect(x: 0, y: 0, width: 200, height: 200), contentSize: CGSize(width: 200, height: 100)))
     }
+    func testPermissionGuidanceIdentifiesMountedImageAndInstalledCopies() {
+        let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
+        XCTAssertEqual(AppCopyLocation.classify(bundleURL: URL(fileURLWithPath: "/Applications/PairDesk.app"), homeDirectory: home), .applications)
+        XCTAssertEqual(AppCopyLocation.classify(bundleURL: URL(fileURLWithPath: "/Users/example/Applications/PairDesk.app"), homeDirectory: home), .applications)
+        XCTAssertEqual(AppCopyLocation.classify(bundleURL: URL(fileURLWithPath: "/Volumes/PairDesk/PairDesk.app"), homeDirectory: home), .diskImage)
+        XCTAssertEqual(AppCopyLocation.classify(bundleURL: URL(fileURLWithPath: "/tmp/PairDesk.app"), homeDirectory: home), .other("/tmp/PairDesk.app"))
+    }
     func testBackendWireContractsDecode() throws {
         let data = Data(#"{"room":{"id":"abc","name":"Debugging","participantCount":1,"participants":[{"id":"u1","name":"Sam","email":"sam@example.com"}]},"url":"wss://rtc.example.com","token":"opaque","participantIdentity":"u1"}"#.utf8)
         let join = try JSONDecoder().decode(JoinResponse.self, from: data)
