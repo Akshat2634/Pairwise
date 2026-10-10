@@ -75,6 +75,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private let maxQueuedControlSends = 256
 
     var activeControllerIdentity: String? { isSharing ? controlArbiter.driverIdentity : nil }
+    var isSharingWindow: Bool { isSharing && shareIsWindow }
 
     func participantName(for identity: String) -> String {
         participants.first(where: { $0.identity == identity })?.name ?? identity
@@ -225,6 +226,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         }
         var pendingTrack: LocalVideoTrack?
         do {
+            let selectedWindow = contentFilter.style == .window
             let selectedFrame = contentFilter.contentRect
             let canControlDisplay = AXIsProcessTrusted()
             let trackName = "pairdesk.screen.display"
@@ -242,8 +244,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                                                      simulcast: false)
             _ = try await room.localParticipant.publish(videoTrack: track, options: publishOptions)
             shareTrack = track
-            shareBounds = selectedFrame
-            shareIsWindow = false
+            shareBounds = selectedWindow ? nil : selectedFrame
+            shareIsWindow = selectedWindow
             remoteControlAvailable = !shareIsWindow && canControlDisplay
             automaticControlEnabled = remoteControlAvailable
             if automaticControlEnabled { controlArbiter.enable() }
@@ -251,7 +253,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             isSharing = true
             activeSharerIdentity = localIdentity
             controlState = .host
-            status = automaticControlEnabled ? "Sharing display · teammates can control when they interact" : "Sharing display · remote control unavailable"
+            status = selectedWindow
+                ? "Sharing window · remote control unavailable"
+                : (automaticControlEnabled ? "Sharing display · teammates can control when they interact" : "Sharing display · remote control unavailable")
             sendControl(.init(epoch: UUID().uuidString, sequence: nextSequence(), kind: .releaseAll))
             pendingTrack = nil
         } catch {

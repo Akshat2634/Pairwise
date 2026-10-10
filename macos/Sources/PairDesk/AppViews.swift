@@ -143,8 +143,8 @@ struct SharedScreenWindow: View {
                     } else {
                         VStack(spacing: 16) {
                             Image(systemName: rtc.isSharing ? "display.and.arrow.up" : "phone").font(.system(size: 44))
-                            Text(rtc.isSharing ? "Your screen is shared" : (store.activeRoom == nil ? "Call ended" : "Voice call connected"))
-                            Text(rtc.isSharing ? "Your teammates can control your shared display. Use the menu bar to stop control." : "Call controls and your team are in the PairDesk menu bar.").font(.caption).foregroundStyle(.secondary)
+                            Text(rtc.isSharing ? (rtc.isSharingWindow ? "Your window is shared" : "Your display is shared") : (store.activeRoom == nil ? "Call ended" : "Voice call connected"))
+                            Text(rtc.isSharing ? (rtc.isSharingWindow ? "Window sharing is view-only. Use the menu bar to stop sharing." : "Your teammates can control your shared display. Use the menu bar to stop control.") : "Call controls and your team are in the PairDesk menu bar.").font(.caption).foregroundStyle(.secondary)
                         }.padding(30)
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)

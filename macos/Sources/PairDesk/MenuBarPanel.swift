@@ -66,6 +66,8 @@ struct MenuBarPanel: View {
                         }
                         if rtc.remoteControlAvailable {
                             Button(rtc.automaticControlEnabled ? "Stop control" : "Allow control again") { if rtc.automaticControlEnabled { rtc.pauseRemoteControl() } else { rtc.resumeRemoteControl() } }
+                        } else if rtc.isSharingWindow {
+                            Text("Window sharing is view-only").font(.caption).foregroundStyle(.secondary)
                         } else if !permissions.accessibility {
                             Button("Set up remote control…") { show("permissions") }.font(.caption)
                         } else {

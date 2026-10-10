@@ -1,7 +1,7 @@
 import Foundation
 import ScreenCaptureKit
 
-/// Uses Apple's native picker and limits capture access to one user-selected display.
+/// Uses Apple's native picker and limits capture access to one user-selected display or window.
 @available(macOS 14.0, *)
 @MainActor
 final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPickerObserver {
@@ -13,7 +13,7 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
             self.continuation = continuation
             let picker = SCContentSharingPicker.shared
             var configuration = picker.defaultConfiguration
-            configuration.allowedPickerModes = [.singleDisplay]
+            configuration.allowedPickerModes = [.singleDisplay, .singleWindow]
             picker.defaultConfiguration = configuration
             picker.add(self)
             picker.isActive = true
