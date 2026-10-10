@@ -1,8 +1,16 @@
+<p align="center">
+  <img src="assets/pairwise-logo.svg" width="280" alt="Pairwise logo">
+</p>
+
 # Pairwise
 
 Pairwise is an open-source macOS pairing app for small teams. It combines direct teammate calls, voice, full-display sharing, and optional remote mouse and keyboard control. Calls use LiveKit; the account and presence service is a small Go API. Optional transcripts run locally with Whisper Tiny. There is no camera feature, cloud transcription, public signup, or external account integration.
 
 The current client supports macOS 14 and later. It is an early-stage project; test it with non-sensitive accounts and machines before relying on it.
+
+**Download the complete source:** [ZIP archive of the latest `main` branch](https://github.com/EvAlssment/Pairwise/archive/refs/heads/main.zip) · [browse the repository](https://github.com/EvAlssment/Pairwise)
+
+The ZIP contains the tracked source code and documentation. It is not an installable app; follow the build steps below to create a local macOS build. Whisper source and model files are downloaded separately by the preparation script and are not included in the repository.
 
 ## Screen sharing and macOS permissions
 
