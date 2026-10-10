@@ -1,0 +1,118 @@
+name: macOS release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      DEVELOPER_SIGNING_IDENTITY: ${{ secrets.DEVELOPER_SIGNING_IDENTITY }}
+      DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+      DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      PAIRDESK_SERVER_URL: ${{ vars.PAIRDESK_SERVER_URL }}
+      PAIRDESK_NOTARY_PROFILE: pairdesk-release-notary
+      PAIRDESK_RELEASE_OUTPUT: ${{ runner.temp }}/pairdesk-release
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+
+      - name: Validate release configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DEVELOPER_SIGNING_IDENTITY DEVELOPER_ID_CERTIFICATE_BASE64 DEVELOPER_ID_CERTIFICATE_PASSWORD APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD PAIRDESK_SERVER_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required GitHub secret or variable: $name" >&2
+              exit 1
+            fi
+          done
+          [[ "$DEVELOPER_SIGNING_IDENTITY" == 'Developer ID Application:'* ]] || {
+            echo 'DEVELOPER_SIGNING_IDENTITY must be a Developer ID Application identity' >&2
+            exit 1
+          }
+          TAG_VERSION=${GITHUB_REF_NAME#v}
+          APP_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' macos/Info.plist)
+          [[ "$TAG_VERSION" == "$APP_VERSION" ]] || {
+            echo "Tag v$TAG_VERSION does not match app version $APP_VERSION in macos/Info.plist" >&2
+            exit 1
+          }
+
+      - name: Import Developer ID certificate and store notarization credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/pairdesk-release.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "$DEVELOPER_ID_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$DEVELOPER_ID_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -F -- "\"$DEVELOPER_SIGNING_IDENTITY\"" >/dev/null
+          xcrun notarytool store-credentials "$PAIRDESK_NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --keychain "$KEYCHAIN_PATH"
+          echo "PAIRDESK_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "PAIRDESK_KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          echo "PAIRDESK_CERTIFICATE_PATH=$CERTIFICATE_PATH" >> "$GITHUB_ENV"
+
+      - name: Build universal Whisper runtime
+        run: sh scripts/prepare-whisper.sh
+
+      - name: Run macOS tests
+        working-directory: macos
+        run: swift test -j 4
+
+      - name: Build app bundle
+        run: sh scripts/build-app.sh
+
+      - name: Sign, notarize, package, and assess
+        run: sh scripts/release-app.sh
+
+      - name: Publish GitHub release
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$PAIRDESK_RELEASE_OUTPUT/PairDesk.dmg" \
+            "$PAIRDESK_RELEASE_OUTPUT/PairDesk.zip" \
+            "$PAIRDESK_RELEASE_OUTPUT/SHA256SUMS" \
+            --verify-tag \
+            --title "Pairwise $GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: Remove temporary signing material
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${PAIRDESK_KEYCHAIN_PATH:-}" ]]; then
+            security delete-keychain "$PAIRDESK_KEYCHAIN_PATH"
+          fi
+          if [[ -n "${PAIRDESK_CERTIFICATE_PATH:-}" ]]; then
+            rm -f "$PAIRDESK_CERTIFICATE_PATH"
+          fi
+          rm -rf "$PAIRDESK_RELEASE_OUTPUT"

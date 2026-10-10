@@ -10,6 +10,8 @@ The current client supports macOS 14 and later. It is an early-stage project; te
 
 **Download the complete source:** [ZIP archive of the latest `main` branch](https://github.com/EvAlssment/Pairwise/archive/refs/heads/main.zip) · [browse the repository](https://github.com/EvAlssment/Pairwise)
 
+Installable macOS builds will be published under [GitHub Releases](https://github.com/EvAlssment/Pairwise/releases) after the signed and notarized release workflow is configured. See [the release guide](docs/releasing.md).
+
 The ZIP contains the tracked source code and documentation. It is not an installable app; follow the build steps below to create a local macOS build. Whisper source and model files are downloaded separately by the preparation script and are not included in the repository.
 
 ## Screen sharing and macOS permissions
@@ -66,7 +68,7 @@ The LiveKit integration test needs a running local stack and is exercised separa
 - `scripts/` — local build, packaging, speech-runtime preparation, and integration checks.
 - `vendor/livekit-client-swift/` — source vendor of LiveKit Swift SDK 2.17.0 with the native-picker filter track overload.
 
-Read [the architecture notes](docs/architecture.md), [self-hosting guide](docs/self-hosting.md), and [third-party notices](THIRD_PARTY_NOTICES.md) before operating a public server or redistributing a binary.
+Read [the architecture notes](docs/architecture.md), [feature parity roadmap](docs/feature-parity.md), [release guide](docs/releasing.md), [self-hosting guide](docs/self-hosting.md), and [third-party notices](THIRD_PARTY_NOTICES.md) before operating a public server or redistributing a binary.
 
 ## License
 

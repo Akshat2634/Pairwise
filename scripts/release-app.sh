@@ -15,9 +15,10 @@ PYURL
 [[ -n "$PROFILE" ]] || { echo 'Set PAIRDESK_NOTARY_PROFILE to your stored notarytool credential profile' >&2; exit 1; }
 security find-identity -v -p codesigning | grep -F -- "\"$IDENTITY\"" >/dev/null || { echo 'Requested Developer ID identity is unavailable' >&2; exit 1; }
 [[ -x "$SOURCE/Contents/MacOS/PairDesk" ]] || { echo 'Build the app first' >&2; exit 1; }
-OUTPUT="$ROOT/dist/release"
-[[ ! -e "$OUTPUT" ]] || { echo 'dist/release already exists; preserve it before producing a new release' >&2; exit 1; }
-STAGING=$(mktemp -d "$ROOT/dist/.release.XXXXXX")
+OUTPUT=${PAIRDESK_RELEASE_OUTPUT:-"$ROOT/dist/release"}
+[[ ! -e "$OUTPUT" ]] || { echo "$OUTPUT already exists; preserve it before producing another release" >&2; exit 1; }
+mkdir -p "$(dirname "$OUTPUT")"
+STAGING=$(mktemp -d "$(dirname "$OUTPUT")/.pairdesk-release.XXXXXX")
 trap 'rm -rf "$STAGING"' EXIT
 APP="$STAGING/PairDesk.app"
 ditto "$SOURCE" "$APP"
@@ -46,9 +47,25 @@ PY
 xcrun stapler staple "$APP"
 xcrun stapler validate "$APP"
 spctl --assess --type execute --verbose=2 "$APP"
-rm "$STAGING/PairDesk-submit.zip"
+rm -f "$STAGING/PairDesk-submit.zip"
 ditto -c -k --keepParent "$APP" "$STAGING/PairDesk.zip"
-(cd "$STAGING" && shasum -a 256 PairDesk.zip > SHA256SUMS)
+PAIRDESK_DISTRIBUTION_APP="$APP" \
+PAIRDESK_DMG_OUTPUT="$STAGING/PairDesk.dmg" \
+  sh "$ROOT/scripts/create-dmg.sh"
+xcrun notarytool submit "$STAGING/PairDesk.dmg" --keychain-profile "$PROFILE" --wait --output-format json > "$STAGING/dmg-notarization.json"
+python3 - "$STAGING/dmg-notarization.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as stream:
+    result = json.load(stream)
+if result.get('status') != 'Accepted':
+    print('DMG notarization was not accepted; inspect the Apple submission log for ID ' + result.get('id', 'unknown'), file=sys.stderr)
+    sys.exit(1)
+PY
+xcrun stapler staple "$STAGING/PairDesk.dmg"
+xcrun stapler validate "$STAGING/PairDesk.dmg"
+spctl --assess --type open --context context:primary-signature --verbose=2 "$STAGING/PairDesk.dmg"
+rm -f "$STAGING/PairDesk.dmg.sha256" "$STAGING/dmg-notarization.json" "$STAGING/notarization.json"
+(cd "$STAGING" && shasum -a 256 PairDesk.dmg PairDesk.zip > SHA256SUMS)
 mv "$STAGING" "$OUTPUT"
 trap - EXIT
-echo "Signed, notarized, stapled and assessed release: $OUTPUT/PairDesk.zip"
+echo "Signed, notarized, stapled and assessed release: $OUTPUT/PairDesk.dmg"
