@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -43,7 +44,14 @@ func New(st *Store) *Server {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			fail(w, 405, "method not allowed")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/readyz", s.ready)
 	mux.HandleFunc("/v1/login", s.login)
 	mux.HandleFunc("/v1/me", s.auth(s.me))
 	mux.HandleFunc("/v1/users", s.auth(s.users))
@@ -51,11 +59,25 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/logout", s.auth(s.logout))
 	mux.HandleFunc("/v1/password", s.auth(s.changePassword))
 	mux.HandleFunc("/v1/admin/users", s.auth(s.adminCreateUser))
+	mux.HandleFunc("/v1/admin/users/", s.auth(s.adminUserAction))
 	mux.HandleFunc("/v1/rooms", s.auth(s.rooms))
 	mux.HandleFunc("/v1/rooms/", s.auth(s.roomAction))
 	mux.HandleFunc("/v1/calls", s.auth(s.calls))
 	mux.HandleFunc("/v1/calls/", s.auth(s.callAction))
 	return securityHeaders(mux)
+}
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, 405, "method not allowed")
+		return
+	}
+	status, _, err := s.livekitCallResult("ListRooms", map[string]any{"names": []string{}})
+	if err != nil || status < 200 || status >= 300 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "dependency": "media"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "media": true})
 }
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,13 +88,16 @@ func securityHeaders(next http.Handler) http.Handler {
 }
 
 type apiUser struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	Admin bool   `json:"admin,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Email   string `json:"email"`
+	Admin   bool   `json:"admin,omitempty"`
+	Enabled bool   `json:"enabled"`
 }
 
-func pub(u User) apiUser { return apiUser{u.ID, u.Name, u.Email, u.Admin} }
+func pub(u User) apiUser {
+	return apiUser{ID: u.ID, Name: u.Name, Email: u.Email, Admin: u.Admin, Enabled: u.Enabled}
+}
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -239,12 +264,21 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request, u User) {
 	writeJSON(w, 200, map[string]any{"user": pub(u)})
 }
 func (s *Server) adminCreateUser(w http.ResponseWriter, r *http.Request, u User) {
-	if r.Method != http.MethodPost {
-		fail(w, 405, "method not allowed")
-		return
-	}
 	if !u.Admin {
 		fail(w, 403, "admin access required")
+		return
+	}
+	if r.Method == http.MethodGet {
+		users := s.store.ListUsers()
+		out := make([]apiUser, 0, len(users))
+		for _, member := range users {
+			out = append(out, pub(member))
+		}
+		writeJSON(w, 200, map[string]any{"users": out})
+		return
+	}
+	if r.Method != http.MethodPost {
+		fail(w, 405, "method not allowed")
 		return
 	}
 	var q struct {
@@ -262,6 +296,56 @@ func (s *Server) adminCreateUser(w http.ResponseWriter, r *http.Request, u User)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"user": pub(created)})
+}
+
+func (s *Server) adminUserAction(w http.ResponseWriter, r *http.Request, admin User) {
+	if !admin.Admin {
+		fail(w, 403, "admin access required")
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/admin/users/"), "/"), "/")
+	if len(parts) != 2 || parts[0] == "" {
+		fail(w, 404, "user action not found")
+		return
+	}
+	switch parts[1] {
+	case "enabled":
+		if r.Method != http.MethodPost {
+			fail(w, 405, "method not allowed")
+			return
+		}
+		var q struct {
+			Enabled bool `json:"enabled"`
+		}
+		if decode(r, &q) != nil {
+			fail(w, 400, "invalid request")
+			return
+		}
+		if err := s.store.SetUserEnabledByID(parts[0], q.Enabled); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	case "password":
+		if r.Method != http.MethodPost {
+			fail(w, 405, "method not allowed")
+			return
+		}
+		var q struct {
+			NewPassword string `json:"newPassword"`
+		}
+		if decode(r, &q) != nil || len(q.NewPassword) < 12 || len(q.NewPassword) > 1024 {
+			fail(w, 400, "new password must be between 12 and 1024 characters")
+			return
+		}
+		if err := s.store.SetUserPasswordByID(parts[0], q.NewPassword); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	default:
+		fail(w, 404, "user action not found")
+	}
 }
 func (s *Server) users(w http.ResponseWriter, r *http.Request, u User) {
 	if r.Method != "GET" {
@@ -713,17 +797,103 @@ func (s *Store) SetUserEnabled(email string, enabled bool) error {
 	defer s.unlock()
 	for id, u := range s.s.Users {
 		if strings.EqualFold(u.Email, email) {
-			u.Enabled = enabled
-			s.s.Users[id] = u
-			for token, sess := range s.s.Sessions {
-				if sess.UserID == id {
-					delete(s.s.Sessions, token)
-				}
-			}
-			return s.save()
+			return s.setUserEnabledLocked(id, u, enabled)
 		}
 	}
 	return errors.New("user not found")
+}
+
+func (s *Store) ListUsers() []User {
+	s.lock()
+	defer s.unlock()
+	users := make([]User, 0, len(s.s.Users))
+	for _, user := range s.s.Users {
+		users = append(users, user)
+	}
+	sort.Slice(users, func(i, j int) bool { return strings.ToLower(users[i].Email) < strings.ToLower(users[j].Email) })
+	return users
+}
+
+func (s *Store) SetUserEnabledByID(id string, enabled bool) error {
+	s.lock()
+	defer s.unlock()
+	user, ok := s.s.Users[id]
+	if !ok {
+		return errors.New("user not found")
+	}
+	return s.setUserEnabledLocked(id, user, enabled)
+}
+
+func (s *Store) setUserEnabledLocked(id string, user User, enabled bool) error {
+	if user.Enabled == enabled {
+		return nil
+	}
+	if !enabled && user.Admin {
+		admins := 0
+		for _, other := range s.s.Users {
+			if other.Admin && other.Enabled {
+				admins++
+			}
+		}
+		if admins <= 1 {
+			return errors.New("cannot disable the last enabled administrator")
+		}
+	}
+	oldSessions := make(map[string]Session, len(s.s.Sessions))
+	for token, session := range s.s.Sessions {
+		oldSessions[token] = session
+	}
+	user.Enabled = enabled
+	s.s.Users[id] = user
+	if !enabled {
+		for token, session := range s.s.Sessions {
+			if session.UserID == id {
+				delete(s.s.Sessions, token)
+			}
+		}
+	}
+	if err := s.save(); err != nil {
+		user.Enabled = !enabled
+		s.s.Users[id] = user
+		s.s.Sessions = oldSessions
+		return err
+	}
+	return nil
+}
+
+func (s *Store) SetUserPasswordByID(id, password string) error {
+	if len(password) < 12 || len(password) > 1024 {
+		return errors.New("password must be between 12 and 1024 characters")
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	s.lock()
+	defer s.unlock()
+	user, ok := s.s.Users[id]
+	if !ok {
+		return errors.New("user not found")
+	}
+	previousHash := user.PasswordHash
+	previousSessions := make(map[string]Session, len(s.s.Sessions))
+	for token, session := range s.s.Sessions {
+		previousSessions[token] = session
+	}
+	user.PasswordHash = string(hash)
+	s.s.Users[id] = user
+	for token, session := range s.s.Sessions {
+		if session.UserID == id {
+			delete(s.s.Sessions, token)
+		}
+	}
+	if err = s.save(); err != nil {
+		user.PasswordHash = previousHash
+		s.s.Users[id] = user
+		s.s.Sessions = previousSessions
+		return err
+	}
+	return nil
 }
 
 var _ = subtle.ConstantTimeCompare

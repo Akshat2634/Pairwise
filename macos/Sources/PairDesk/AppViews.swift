@@ -270,12 +270,14 @@ struct AccountView: View {
     @State private var confirmation = ""
     @State private var saving = false
     @State private var addingMember = false
+    @State private var managingTeam = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(store.user?.name ?? "Account").font(.title2.bold())
             Text(store.user?.email ?? "").foregroundStyle(.secondary)
             if store.user?.admin == true {
                 Button("Create a team account") { addingMember = true }.buttonStyle(.bordered)
+                Button("Manage team accounts…") { managingTeam = true }.buttonStyle(.bordered)
             }
             Divider()
             Toggle("Start PairDesk at login", isOn: Binding(get: { loginItem.enabled }, set: { loginItem.setEnabled($0) }))
@@ -289,6 +291,71 @@ struct AccountView: View {
             HStack { Button("Sign out") { dismiss(); Task { await store.logout() } }.disabled(store.busy || saving); Spacer(); Button("Close") { dismiss() }; Button(saving ? "Saving…" : "Save password") { saving = true; Task { let success = await store.changePassword(current: current, new: newPassword); saving = false; if success { dismiss() } } }.buttonStyle(.borderedProminent).disabled(saving || current.isEmpty || newPassword.count < 12 || newPassword != confirmation) }
         }.padding(30).frame(width: 430)
             .sheet(isPresented: $addingMember) { CreateMemberView(store: store) }
+            .sheet(isPresented: $managingTeam) { ManageTeamView(store: store) }
+    }
+}
+
+private struct ManageTeamView: View {
+    @ObservedObject var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var resetMember: TeamUser?
+    @State private var newPassword = ""
+    @State private var saving = false
+    @State private var error: String?
+    @State private var message: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { Text("Team accounts").font(.title2.bold()); Spacer(); Button("Done") { dismiss() } }
+            Text("Disabling an account ends its sessions. Password resets also sign the member out; share the new password privately.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let error { Text(error).font(.caption).foregroundStyle(.orange) }
+            if let message { Text(message).font(.caption).foregroundStyle(.green) }
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(store.adminUsers) { member in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(member.name).font(.system(size: 13, weight: .medium))
+                                Text(member.email).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Reset password") { resetMember = member; newPassword = ""; message = nil; error = nil }
+                                .controlSize(.small)
+                            Button(member.enabled == false ? "Enable" : "Disable") {
+                                saving = true; error = nil; message = nil
+                                Task {
+                                    do { try await store.setTeamMemberEnabled(member, enabled: member.enabled == false); message = "Account updated." }
+                                    catch { self.error = error.localizedDescription }
+                                    saving = false
+                                }
+                            }.controlSize(.small).disabled(saving || (member.admin == true && member.enabled != false && store.adminUsers.filter { $0.admin == true && $0.enabled != false }.count <= 1))
+                        }.padding(9).background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }.frame(minHeight: 180, maxHeight: 320)
+            if let resetMember {
+                Divider()
+                Text("Reset password for \(resetMember.name)").font(.headline)
+                SecureField("New password (12+ characters)", text: $newPassword).textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Cancel") { self.resetMember = nil; newPassword = "" }
+                    Spacer()
+                    Button(saving ? "Saving…" : "Set password") {
+                        saving = true; error = nil; message = nil
+                        Task {
+                            do {
+                                try await store.resetTeamMemberPassword(resetMember, newPassword: newPassword)
+                                self.resetMember = nil; newPassword = ""; message = "Password reset; the member must sign in again."
+                            } catch { self.error = error.localizedDescription }
+                            saving = false
+                        }
+                    }.buttonStyle(.borderedProminent).disabled(saving || newPassword.count < 12)
+                }
+            }
+        }.padding(24).frame(width: 620).task {
+            do { try await store.refreshAdminUsers() } catch { self.error = error.localizedDescription }
+        }
     }
 }
 

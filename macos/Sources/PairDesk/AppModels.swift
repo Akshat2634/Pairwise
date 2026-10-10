@@ -7,6 +7,7 @@ struct TeamUser: Codable, Identifiable, Equatable {
     var online: Bool?
     var busy: Bool?
     var admin: Bool?
+    var enabled: Bool?
     var initials: String { name.split(separator: " ").prefix(2).compactMap { $0.first }.map(String.init).joined().uppercased() }
 }
 

@@ -18,7 +18,7 @@ Pairwise is a macOS-first, open-source pairing client for a 10–15 person inter
 | Transcription | Optional local Whisper Tiny transcript, in-memory by default, user-triggered text export | Tuple documents local capture/transcription options; broad recording features are outside Pairwise's scope | Appropriate differentiator for privacy. Improve only around local consent, clear status, cancellation, crash cleanup, and technical vocabulary quality. |
 | Install and updates | Build/package scripts and test DMGs exist; automatic login-item support exists | Tuple and Hopp offer packaged apps and update paths | Not release-ready. No Developer ID identity is installed, no notarized public release exists, and no in-app updater is implemented. Source ZIP is not an installer. |
 | Reliability and diagnostics | API/LiveKit integration tests, race tests, TURN/TLS checks, synthetic screen transport tests | Mature calling tools provide reconnect handling, clear call state, and support diagnostics | Automated transport evidence is useful, but actual voice, capture, control, sleep/wake, display changes, and latest macOS permission behavior need two physical Macs. No end-user connection-quality panel exists. |
-| Administration and operations | Manual account creation in app; bootstrap and deployment tooling; GCP test deployment | Tuple includes team roles, account management, integrations, and SSO; Hopp offers self-hosting and managed service | Current choices fit a small team. Prioritize admin password reset/disable and production monitoring/backups before adding enterprise identity. |
+| Administration and operations | Admin account list, create, enable/disable, and password reset in app; liveness and media readiness endpoints; bootstrap and deployment tooling | Tuple includes team roles, account management, integrations, and SSO; Hopp offers self-hosting and managed service | Account operations and dependency readiness are implemented. Production monitoring, tested backup restore, and real media-network validation remain. |
 
 ## Permission answer
 
@@ -58,7 +58,7 @@ Add a mic test/meter, persistent start-muted preference, verified device hot-plu
 
 ### P2 — Finish internal operations
 
-Add administrator password reset and account disable/enable in the app. Add health/uptime and backup-restore checks for the GCP services, a call diagnostics bundle that omits secrets/audio/screen content, and a versioned release/update path. Keep SSO, external integrations, and enterprise audit features out of this phase.
+Administrator password reset and account enable/disable are now available in the app, with session revocation and protection against disabling the last admin. `/healthz` reports process liveness and `/readyz` checks LiveKit reachability without exposing credentials. Add production monitoring and backup-restore drills for GCP, a local call diagnostics bundle that omits secrets/audio/screen content, and a versioned release/update path. Keep SSO, external integrations, and enterprise audit features out of this phase.
 
 ## Deliberately not pursuing now
 

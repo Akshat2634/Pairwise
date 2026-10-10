@@ -8,6 +8,7 @@ import SwiftUI
 final class AppStore: ObservableObject {
     @Published var user: TeamUser?
     @Published var users: [TeamUser] = []
+    @Published var adminUsers: [TeamUser] = []
     @Published var rooms: [PairRoom] = []
     @Published var callInvitations: [CallInvitation] = []
     @Published var callMessage: String?
@@ -374,5 +375,24 @@ final class AppStore: ObservableObject {
         struct Body: Encodable { let name: String; let email: String; let password: String }
         let _: MeResponse = try await api.post("v1/admin/users", body: Body(name: name, email: email, password: password))
         await refresh()
+        try await refreshAdminUsers()
+    }
+
+    func refreshAdminUsers() async throws {
+        let response: UsersResponse = try await api.request("v1/admin/users")
+        adminUsers = response.users
+    }
+
+    func setTeamMemberEnabled(_ member: TeamUser, enabled: Bool) async throws {
+        struct Body: Encodable { let enabled: Bool }
+        try await api.send("v1/admin/users/\(member.id)/enabled", body: Body(enabled: enabled))
+        try await refreshAdminUsers()
+        await refresh()
+    }
+
+    func resetTeamMemberPassword(_ member: TeamUser, newPassword: String) async throws {
+        struct Body: Encodable { let newPassword: String }
+        try await api.send("v1/admin/users/\(member.id)/password", body: Body(newPassword: newPassword))
+        try await refreshAdminUsers()
     }
 }

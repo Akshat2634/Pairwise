@@ -101,6 +101,22 @@ func login(t *testing.T, s *Server) string {
 	}
 	return x.Token
 }
+
+func TestHealthAndReadinessDistinguishLivenessFromMediaDependency(t *testing.T) {
+	s, _ := fixture(t)
+	h := s.Handler()
+	if w := request(h, "GET", "/healthz", "", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("liveness failed: %d %s", w.Code, w.Body)
+	}
+	if w := request(h, "GET", "/readyz", "", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"media":true`) {
+		t.Fatalf("readiness failed: %d %s", w.Code, w.Body)
+	}
+	s.liveSecret = ""
+	if w := request(h, "GET", "/readyz", "", ""); w.Code != 503 || strings.Contains(w.Body.String(), "secret") {
+		t.Fatalf("unavailable media dependency was not reported safely: %d %s", w.Code, w.Body)
+	}
+}
+
 func TestAuthLoginAndDisabledOffboarding(t *testing.T) {
 	s, u := fixture(t)
 	h := s.Handler()
@@ -180,6 +196,47 @@ func TestAdminCreatesInvitedUserAndPublicPayloadOmitsSecrets(t *testing.T) {
 		t.Fatalf("admin role not exposed on me: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestAdminCanListResetAndDisableUsersWithoutExposingCredentialData(t *testing.T) {
+	s, member := fixture(t)
+	h := s.Handler()
+	memberToken := login(t, s)
+	if w := request(h, "GET", "/v1/admin/users", memberToken, ""); w.Code != 403 {
+		t.Fatalf("non-admin list status %d", w.Code)
+	}
+	admin, err := s.store.CreateUser("Admin", "admin@example.com", "correct-horse-battery", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminToken, _ := randomID(32)
+	s.store.lock()
+	s.store.s.Sessions[adminToken] = Session{admin.ID, time.Now().Add(time.Hour)}
+	_ = s.store.save()
+	s.store.unlock()
+	w := request(h, "GET", "/v1/admin/users", adminToken, "")
+	if w.Code != 200 || strings.Contains(w.Body.String(), "passwordHash") || strings.Contains(w.Body.String(), "correct-horse-battery") {
+		t.Fatalf("admin list leaked credentials or failed: %d %s", w.Code, w.Body)
+	}
+	if w = request(h, "POST", "/v1/admin/users/"+member.ID+"/password", adminToken, `{"newPassword":"new-member-password"}`); w.Code != 200 {
+		t.Fatalf("admin reset password: %d %s", w.Code, w.Body)
+	}
+	if w = request(h, "GET", "/v1/me", memberToken, ""); w.Code != 401 {
+		t.Fatalf("reset should revoke prior member sessions: %d", w.Code)
+	}
+	if w = request(h, "POST", "/v1/login", "", `{"email":"a@example.com","password":"new-member-password"}`); w.Code != 200 {
+		t.Fatalf("new member password rejected: %d %s", w.Code, w.Body)
+	}
+	if w = request(h, "POST", "/v1/admin/users/"+member.ID+"/enabled", adminToken, `{"enabled":false}`); w.Code != 200 {
+		t.Fatalf("disable member: %d %s", w.Code, w.Body)
+	}
+	if w = request(h, "POST", "/v1/login", "", `{"email":"a@example.com","password":"new-member-password"}`); w.Code != 401 {
+		t.Fatalf("disabled member signed in: %d", w.Code)
+	}
+	if err := s.store.SetUserEnabled(admin.Email, false); err == nil {
+		t.Fatal("last enabled administrator was disabled")
+	}
+}
+
 func TestLoginRateLimitCountsOnlyFailures(t *testing.T) {
 	s, _ := fixture(t)
 	h := s.Handler()
