@@ -59,6 +59,12 @@ final class PairDeskDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Accessory mode and LSUIElement keep calling in the menu bar.
         NSApp.setActivationPolicy(.accessory)
+        #if DEBUG
+        if let directory = ProcessInfo.processInfo.environment["PAIRDESK_SNAPSHOT_DIR"] {
+            UISnapshots.render(to: URL(fileURLWithPath: directory, isDirectory: true))
+            exit(0)
+        }
+        #endif
         AppRuntime.shared.start()
 
     }
