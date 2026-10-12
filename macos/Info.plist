@@ -8,6 +8,8 @@
 	<string>PairDesk</string>
 	<key>CFBundleExecutable</key>
 	<string>PairDesk</string>
+	<key>CFBundleIconFile</key>
+	<string>PairDesk</string>
 	<key>CFBundleIdentifier</key>
 	<string>app.internal.pairdesk</string>
 	<key>CFBundleInfoDictionaryVersion</key>

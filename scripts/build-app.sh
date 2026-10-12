@@ -72,6 +72,8 @@ with open(sys.argv[1], 'wb') as stream:
     plistlib.dump(info, stream)
 PYURL
 fi
+test -f "$MACOS/Resources/PairDesk.icns" || fail "app icon is missing; run: swift scripts/make-app-icon.swift"
+ditto "$MACOS/Resources/PairDesk.icns" "$RESOURCES/PairDesk.icns"
 ditto "$WHISPER_RUNTIME/whisper-cli" "$RESOURCES/whisper/whisper-cli"
 ditto "$WHISPER_RUNTIME/ggml-tiny.bin" "$RESOURCES/whisper/ggml-tiny.bin"
 chmod 755 "$APP_EXECUTABLE" "$RESOURCES/whisper/whisper-cli"
@@ -143,6 +145,7 @@ copy_notice "$ROOT/THIRD_PARTY_NOTICES.md" "THIRD_PARTY_NOTICES.md"
 plutil -lint "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$CONTENTS/Info.plist" | grep -Fx 'app.internal.pairdesk' >/dev/null
 /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$CONTENTS/Info.plist" | grep -Fx '14.0' >/dev/null
+/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$CONTENTS/Info.plist" | grep -Fx 'PairDesk' >/dev/null
 if /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$CONTENTS/Info.plist" >/dev/null 2>&1; then
   fail "camera usage description must not be present"
 fi

@@ -399,5 +399,11 @@ struct MenuBarStatusLabel: View {
             .onChange(of: store.activeRoom?.id) { _, id in
                 if id == nil { dismissWindow(id: "screen"); dismissWindow(id: "share") }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .pairDeskReopen)) { _ in
+                // Dock click during a call: show the shared screen if there is
+                // one, otherwise the app window with call status and settings.
+                openWindow(id: rtc.screenTrack != nil && !rtc.isSharing ? "screen" : "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
     }
 }

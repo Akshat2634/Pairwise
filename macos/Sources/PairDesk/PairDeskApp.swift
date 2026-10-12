@@ -1,5 +1,11 @@
 import SwiftUI
 import AppKit
+import Combine
+
+extension Notification.Name {
+    /// Posted when the person clicks the Dock icon, which exists only during a call.
+    static let pairDeskReopen = Notification.Name("app.internal.pairdesk.reopen")
+}
 
 @MainActor
 final class AppRuntime {
@@ -56,9 +62,15 @@ struct PairDeskApp: App {
 @MainActor
 final class PairDeskDelegate: NSObject, NSApplicationDelegate {
     var store: AppStore { AppRuntime.shared.store }
+    private var dockPresence: AnyCancellable?
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Accessory mode and LSUIElement keep calling in the menu bar.
+        // Accessory mode and LSUIElement keep calling in the menu bar. Like
+        // Tuple, the Dock icon appears only while a call is active, so the
+        // call is reachable with Cmd-Tab and the icon is a reminder it's on.
         NSApp.setActivationPolicy(.accessory)
+        dockPresence = store.$activeRoom.map { $0 != nil }.removeDuplicates().sink { inCall in
+            NSApp.setActivationPolicy(inCall ? .regular : .accessory)
+        }
         #if DEBUG
         if let directory = ProcessInfo.processInfo.environment["PAIRDESK_SNAPSHOT_DIR"] {
             UISnapshots.render(to: URL(fileURLWithPath: directory, isDirectory: true))
@@ -74,6 +86,10 @@ final class PairDeskDelegate: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NotificationCenter.default.post(name: .pairDeskReopen, object: nil)
+        return false
+    }
 }
 
 private struct InitialWindowHider: NSViewRepresentable {
