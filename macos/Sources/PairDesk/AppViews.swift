@@ -32,45 +32,33 @@ private struct LoginView: View {
     @State private var serverExpanded = false
     @FocusState private var focused: Bool
     var body: some View {
-        HStack(spacing: 80) {
-            VStack(alignment: .leading, spacing: 24) {
-                Logo(size: 62)
-                Text("Work together.\nFrom your Mac.").font(.system(size: 46, weight: .semibold, design: .rounded)).lineSpacing(4)
-                Text("A clear screen. A familiar voice.\nYour team's own space to pair.")
-                    .font(.system(size: 19)).foregroundStyle(Palette.muted).lineSpacing(6)
-                HStack(spacing: 18) {
-                    Label("Voice", systemImage: "waveform")
-                    Label("Screen", systemImage: "display")
-                    Label("Control", systemImage: "cursorarrow")
-                }.font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.accent).padding(.top, 16)
-            }.frame(maxWidth: 430, alignment: .leading)
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Welcome to PairDesk").font(.system(size: 25, weight: .semibold))
-                Text("Sign in with the account your team created.").foregroundStyle(Palette.muted).font(.system(size: 13))
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("EMAIL").font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.muted)
-                    TextField("you@team.com", text: $email).textFieldStyle(.roundedBorder).focused($focused)
-                }.padding(.top, 12)
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("PASSWORD").font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.muted)
-                    SecureField("Your password", text: $password).textFieldStyle(.roundedBorder)
-                }
-                Button {
-                    let submitted = password
-                    password = ""
-                    Task { await store.login(email: email, password: submitted) }
-                } label: {
-                    HStack { Spacer(); if store.busy { ProgressView().controlSize(.small) } else { Text("Sign in").fontWeight(.semibold); Image(systemName: "arrow.right") }; Spacer() }
-                        .padding(.vertical, 10)
-                }.buttonStyle(.borderedProminent).disabled(store.busy || email.isEmpty || password.isEmpty)
-                    .keyboardShortcut(.defaultAction)
-                DisclosureGroup("Server address", isExpanded: $serverExpanded) {
-                    TextField("https://pair.yourteam.com", text: $store.serverAddress).textFieldStyle(.roundedBorder).padding(.top, 8)
-                }.font(.system(size: 12)).foregroundStyle(Palette.muted).disabled(store.busy)
-                Text("Need an account or password reset? Ask your team administrator.")
-                    .font(.system(size: 11)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
-            }.padding(32).frame(width: 360).background(Palette.panel, in: RoundedRectangle(cornerRadius: 20))
-        }.padding(60).frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(alignment: .leading, spacing: 18) {
+            Logo(size: 44).padding(.top, 12) // clear of the hidden title bar's window buttons
+            Text("Sign in to PairDesk").font(.system(size: 22, weight: .semibold))
+            Text("Use the account your team created.").foregroundStyle(Palette.muted).font(.system(size: 13))
+            VStack(alignment: .leading, spacing: 8) {
+                Text("EMAIL").font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.muted)
+                TextField("you@team.com", text: $email).textFieldStyle(.roundedBorder).focused($focused)
+            }.padding(.top, 12)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("PASSWORD").font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.muted)
+                SecureField("Your password", text: $password).textFieldStyle(.roundedBorder)
+            }
+            Button {
+                let submitted = password
+                password = ""
+                Task { await store.login(email: email, password: submitted) }
+            } label: {
+                HStack { Spacer(); if store.busy { ProgressView().controlSize(.small) } else { Text("Sign in").fontWeight(.semibold); Image(systemName: "arrow.right") }; Spacer() }
+                    .padding(.vertical, 10)
+            }.buttonStyle(.borderedProminent).disabled(store.busy || email.isEmpty || password.isEmpty)
+                .keyboardShortcut(.defaultAction)
+            DisclosureGroup("Server address", isExpanded: $serverExpanded) {
+                TextField("https://pair.yourteam.com", text: $store.serverAddress).textFieldStyle(.roundedBorder).padding(.top, 8)
+            }.font(.system(size: 12)).foregroundStyle(Palette.muted).disabled(store.busy)
+            Text("Need an account or password reset? Ask your team administrator.")
+                .font(.system(size: 11)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
+        }.padding(32).frame(width: 380)
             .onAppear { focused = true }
     }
 }
@@ -235,17 +223,16 @@ struct WorkspaceView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var rtc: RTCService
     @ObservedObject var transcripts: WhisperTranscriber
-    @State private var account = false
-    @State private var permissions = false
+    @Environment(\.openWindow) private var openWindow
     var body: some View {
         VStack(spacing: 20) {
             Image(systemName: "rectangle.on.rectangle").font(.system(size: 46))
             Text("PairDesk lives in your menu bar").font(.title2.bold())
             Text("Click its icon at the top right of your screen to call a teammate, share a display, or manage a call.").multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 440)
-            HStack { Button("Permissions") { permissions = true }; Button("Account settings") { account = true } }
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $account) { AccountView(store: store) }
-        .sheet(isPresented: $permissions) { PermissionsView() }
+            // Their own windows, as in the menu bar: these are taller than this
+            // compact window, so sheets would hang off its bottom edge.
+            HStack { Button("Permissions") { PermissionWindowController.shared.show() }; Button("Account settings") { openWindow(id: "account") } }
+        }.padding(40).frame(width: 520)
     }
 }
 

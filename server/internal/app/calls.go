@@ -374,11 +374,26 @@ func hasActiveCallInRoomLocked(state State, roomID string, now time.Time) bool {
 	}
 	return false
 }
+
+// acceptedCallActiveLocked keeps an accepted call alive while the caller waits
+// for the target to join, then only while the target shares the room with
+// another live member or a pending invitation. A lone client that keeps
+// heartbeating after every peer vanished without /leave (crash, sleep, lost
+// network) must not keep the call, and its busy state, alive indefinitely.
 func acceptedCallActiveLocked(state State, invite CallInvitation, now time.Time) bool {
 	if activeMemberInRoomLocked(state, invite.TargetID, invite.RoomID, now) {
-		return true
+		return liveMemberCountLocked(state, invite.RoomID, now) >= 2 || pendingCallSeatsLocked(state, invite.RoomID, now) > 0
 	}
 	return now.Before(invite.ExpiresAt) && activeMemberInRoomLocked(state, invite.CallerID, invite.RoomID, now)
+}
+func liveMemberCountLocked(state State, roomID string, now time.Time) int {
+	count := 0
+	for id := range state.Rooms[roomID].Members {
+		if activeMemberInRoomLocked(state, id, roomID, now) {
+			count++
+		}
+	}
+	return count
 }
 func roomSeatCountLocked(state State, roomID string, now time.Time) int {
 	count := 0

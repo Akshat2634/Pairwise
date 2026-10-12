@@ -241,6 +241,48 @@ func TestPrivateGroupContinuesUntilOneMemberRemains(t *testing.T) {
 	}
 }
 
+func TestLoneMemberCannotKeepDirectCallBusyAfterPeerVanishes(t *testing.T) {
+	s, caller := fixture(t)
+	h := s.Handler()
+	callerToken := login(t, s)
+	target, targetToken := addCallUser(t, s, "target")
+	_, observerToken := addCallUser(t, s, "observer")
+	roomID, callID := startAcceptedDirectCall(t, s, callerToken, target, targetToken)
+
+	// The caller's process dies without calling /leave; only its reservation expires.
+	s.store.lock()
+	rm := s.store.s.Rooms[roomID]
+	rm.Members[caller.ID] = Member{UserID: caller.ID, LastSeen: time.Now().UTC().Add(-reservationTTL - time.Second)}
+	s.store.s.Rooms[roomID] = rm
+	s.store.unlock()
+	// The target's client keeps heartbeating, as a client that missed the
+	// LiveKit departure would.
+	if w := request(h, "POST", "/v1/rooms/"+roomID+"/heartbeat", targetToken, ""); w.Code != 200 {
+		t.Fatalf("target heartbeat before pruning: %d %s", w.Code, w.Body)
+	}
+	if w := request(h, "GET", "/v1/calls", observerToken, ""); w.Code != 200 {
+		t.Fatalf("observer poll: %d %s", w.Code, w.Body)
+	}
+	s.store.lock()
+	status := s.store.s.Calls[callID].Status
+	busy := s.userBusyLocked(target.ID, time.Now().UTC())
+	s.store.unlock()
+	if status != callCancelled {
+		t.Fatalf("lone-member call status = %q, want %q", status, callCancelled)
+	}
+	if busy {
+		t.Fatal("target stayed busy alone in a call whose peer vanished")
+	}
+	// The lone client learns the call ended on its next heartbeat.
+	if w := request(h, "POST", "/v1/rooms/"+roomID+"/heartbeat", targetToken, ""); w.Code != 403 {
+		t.Fatalf("heartbeat after teardown: %d %s", w.Code, w.Body)
+	}
+	w := request(h, "GET", "/v1/users", observerToken, "")
+	if w.Code != 200 || strings.Contains(w.Body.String(), `"busy":true`) {
+		t.Fatalf("roster still reports a busy user: %d %s", w.Code, w.Body)
+	}
+}
+
 func startAcceptedDirectCall(t *testing.T, s *Server, callerToken string, target User, targetToken string) (string, string) {
 	t.Helper()
 	h := s.Handler()

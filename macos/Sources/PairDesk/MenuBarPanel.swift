@@ -50,7 +50,12 @@ struct MenuBarPanel: View {
                     HStack { ProgressView().controlSize(.small); Text("Calling \(invitation.target.name)…").font(.caption); Spacer(); Button("Cancel") { Task { await store.cancelCall(invitation) } } }
                 }
                 if store.activeRoom != nil {
-                    Text(rtc.participants.filter { !$0.isLocal }.map(\.name).joined(separator: ", ")).font(.subheadline.bold()).lineLimit(2)
+                    // While ringing, nobody else has joined yet; an empty Text
+                    // would still reserve a line and leave a gap in the panel.
+                    let remoteNames = rtc.participants.filter { !$0.isLocal }.map(\.name)
+                    if !remoteNames.isEmpty {
+                        Text(remoteNames.joined(separator: ", ")).font(.subheadline.bold()).lineLimit(2)
+                    }
                     if rtc.isReconnecting {
                         Label(rtc.isSharing ? "Reconnecting · control paused" : "Reconnecting call…", systemImage: "arrow.triangle.2.circlepath")
                             .font(.caption).foregroundStyle(.orange)
@@ -241,7 +246,33 @@ struct IncomingCallView: View {
                 Button("Accept call") { if let call = store.incomingCall { Task { await store.acceptCall(call) } } }.buttonStyle(.borderedProminent)
             }.disabled(store.busy || store.incomingCall == nil)
         }.padding(30).frame(width: 360)
+        .background(FloatingPanelPlacement())
         .onChange(of: store.incomingCall?.id) { _, id in if id == nil { dismissWindow(id: "incoming") } }
+    }
+}
+
+/// Shows the incoming-call window like a notification: top right, above other
+/// apps' windows and on every Space. An accessory app's new window otherwise
+/// opens behind the frontmost app, where a ringing call is easy to miss. It
+/// does not activate the app, so typing elsewhere cannot answer the call.
+private struct FloatingPanelPlacement: NSViewRepresentable {
+    func makeNSView(context: Context) -> FloatingPanelView { FloatingPanelView() }
+    func updateNSView(_ nsView: FloatingPanelView, context: Context) {}
+}
+@MainActor
+private final class FloatingPanelView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        window.level = .floating
+        window.collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary])
+        // Wait one turn so SwiftUI has sized the window before it is placed.
+        DispatchQueue.main.async {
+            if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
+                window.setFrameTopLeftPoint(NSPoint(x: visible.maxX - window.frame.width - 16, y: visible.maxY - 16))
+            }
+            window.orderFrontRegardless()
+        }
     }
 }
 

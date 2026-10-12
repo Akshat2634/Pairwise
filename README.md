@@ -60,6 +60,8 @@ The whisper.cpp source and Tiny model download into ignored `.cache/` and are ch
 (cd macos && swift test -j 4)
 ```
 
+To review UI changes without a server or a call, `sh scripts/ui-snapshots.sh` renders the main screens with fixture data to PNG files in `.cache/ui-snapshots/` using a debug build.
+
 The LiveKit integration test needs a running local stack and is exercised separately by `scripts/test-call.sh`. Hardware checks that require two Macs, OS permission prompts, sleep/wake, and cross-network TURN remain manual; unit tests cannot prove those behaviors.
 
 ## Project map

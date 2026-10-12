@@ -12,9 +12,14 @@ enum SessionVault {
         var q = query
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
-        // Startup stays in the menu bar. A changed development signature may
-        // require Keychain approval; fall back to explicit sign-in rather than
-        // presenting a hidden, blocking authentication dialog on launch.
+        // This only suppresses data-protection keychain UI. The item lives in
+        // the file-based login keychain, whose ACL and partition list trust
+        // the exact signature that created it. An ad-hoc build's designated
+        // requirement is its cdhash, so every new build is a stranger and
+        // macOS asks for the login password (ACL, then partition list) on
+        // launch. Only a stable Developer ID signature makes "Always Allow"
+        // survive updates; ad-hoc builds cannot use the data-protection
+        // keychain because keychain-access-groups needs a provisioning profile.
         q[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
         var item: CFTypeRef?
         guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
