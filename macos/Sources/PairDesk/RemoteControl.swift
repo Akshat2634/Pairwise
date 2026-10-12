@@ -15,6 +15,7 @@ enum RemoteControlState: Equatable {
     case unavailable
     case viewer
     case requesting
+    case hostPermissionRequired
     case host
     case granted(identity: String, expiresAt: Date)
 }
@@ -26,7 +27,7 @@ extension RemoteControlState {
 /// Wire format for ephemeral control traffic. `identity` is deliberately not
 /// encoded: the receiver must use LiveKit's authenticated participant identity.
 struct RemoteControlMessage: Codable, Equatable {
-    enum Kind: String, Codable { case request, grant, revoke, release, heartbeat, pointer, key, button, scroll, releaseAll }
+    enum Kind: String, Codable { case request, grant, revoke, hostPermissionRequired, release, heartbeat, pointer, key, button, scroll, releaseAll }
     var version: Int = 1
     var epoch: String
     var sequence: UInt64

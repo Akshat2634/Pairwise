@@ -79,6 +79,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var heldKeys = Set<UInt16>()
     private var heldButtons = Set<Int>()
     private var lastPointerSentAt: TimeInterval = 0
+    private var lastControlRequestAt: TimeInterval = -.infinity
     private var inputMonitor: Any?
     private var localInputMonitor: Any?
     private var notificationTokens: [NSObjectProtocol] = []
@@ -380,8 +381,10 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     func requestControl() {
-        guard connected, !controlTransportFailed, remoteControlAvailable, let host = activeSharerIdentity,
-              host != localIdentity, case .viewer = controlState else { return }
+        guard canRequestRemoteControl,
+              controlState == .viewer || controlState == .hostPermissionRequired,
+              ProcessInfo.processInfo.systemUptime - lastControlRequestAt >= 1 else { return }
+        lastControlRequestAt = ProcessInfo.processInfo.systemUptime
         controlState = .requesting
         sendControl(.init(epoch: "", sequence: nextSequence(), kind: .request))
     }
@@ -750,7 +753,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         CGEventFlags.maskCommand.rawValue | CGEventFlags.maskSecondaryFn.rawValue
 
     private var controlGateIdentity: String? { controlGate.driverIdentity }
-    private var canRequestRemoteControl: Bool {
+    var canRequestRemoteControl: Bool {
         connected && remoteControlAvailable && activeSharerIdentity != nil && activeSharerIdentity != localIdentity
     }
 
@@ -769,7 +772,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         case .request:
             guard isSharing, !shareIsWindow, sender != localIdentity else { return }
             guard automaticControlEnabled else {
-                sendControl(.init(epoch: "", sequence: nextSequence(), kind: .revoke), to: sender)
+                let kind: RemoteControlMessage.Kind = AXIsProcessTrusted() ? .revoke : .hostPermissionRequired
+                sendControl(.init(epoch: "", sequence: nextSequence(), kind: kind), to: sender)
                 return
             }
             let name = room?.remoteParticipants.values.first(where: { $0.identity?.stringValue == sender })?.name ?? sender
@@ -810,6 +814,17 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             localHeldKeys.removeAll()
             localHeldButtons.removeAll()
             controlState = .viewer
+        case .hostPermissionRequired:
+            guard sender == activeSharerIdentity, case .requesting = controlState else { return }
+            localControllerEpoch = nil
+            heartbeatTask?.cancel()
+            heartbeatTask = nil
+            controllerIdleTask?.cancel()
+            controllerIdleTask = nil
+            queuedLocalIntents.removeAll()
+            localHeldKeys.removeAll()
+            localHeldButtons.removeAll()
+            controlState = .hostPermissionRequired
         case .heartbeat, .pointer, .key, .button, .scroll, .releaseAll, .release:
             guard isSharing,
                   controlGate.accept(message, sender: sender),

@@ -77,9 +77,11 @@ struct SharedScreenWindow: View {
             return "You have control of \(rtc.participantName(for: sharer))'s Mac"
         case .requesting:
             return "Connecting remote control…"
+        case .hostPermissionRequired:
+            return "Ask \(rtc.participantName(for: sharer)) to enable Accessibility, then try again"
         case .viewer:
             return rtc.remoteControlAvailable
-                ? "Viewing \(rtc.participantName(for: sharer)) · control available"
+                ? "Viewing \(rtc.participantName(for: sharer)) · move or click to request control"
                 : "Viewing \(rtc.participantName(for: sharer)) · view only"
         case .host:
             return "You are sharing your display"

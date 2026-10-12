@@ -8,7 +8,10 @@ struct InteractiveScreenView: NSViewRepresentable {
     func makeNSView(context: Context) -> ScreenCanvas { ScreenCanvas(rtc: rtc) }
     func updateNSView(_ view: ScreenCanvas, context: Context) {
         view.video.track = track
-        view.driving = rtc.controlState.isGranted && !rtc.isSharing
+        // Keep the viewer interactive while the host grants control. Without
+        // this, a denied first request leaves no path to request again after
+        // Accessibility is enabled during the same share.
+        view.driving = rtc.canRequestRemoteControl
         view.needsLayout = true
     }
     static func dismantleNSView(_ view: ScreenCanvas, coordinator: ()) {
