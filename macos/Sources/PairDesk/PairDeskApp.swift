@@ -27,9 +27,9 @@ struct PairDeskApp: App {
         } label: { MenuBarStatusLabel(store: store, rtc: store.rtc) }
         .menuBarExtraStyle(.window)
         Window("PairDesk", id: "main") {
-            RootView(store: store).environmentObject(loginItem).frame(minWidth: 980, minHeight: 650).preferredColorScheme(.dark)
+            RootView(store: store).environmentObject(loginItem).preferredColorScheme(.dark)
                 .background(InitialWindowHider())
-        }.windowStyle(.hiddenTitleBar).defaultSize(width: 1100, height: 700)
+        }.windowStyle(.hiddenTitleBar).windowResizability(.contentSize)
         Window("PairDesk · Shared screen", id: "screen") {
             SharedScreenWindow(store: store, rtc: store.rtc, transcripts: store.transcripts).frame(minWidth: 700, minHeight: 450).preferredColorScheme(.dark)
         }.defaultSize(width: 1440, height: 900)

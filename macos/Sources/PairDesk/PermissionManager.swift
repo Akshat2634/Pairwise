@@ -88,23 +88,31 @@ struct PermissionsView: View {
         return "\(identifier) · no Apple Developer team"
     }
     var body: some View {
+        // One row per capability; the long troubleshooting copy is collapsed so
+        // the fixed-size window fits on a 13-inch display.
         VStack(alignment: .leading, spacing: 20) {
             Text("Privacy and access").font(.title2.bold())
-            Text("Pairwise asks for access only when you use the related feature. You can call and view a teammate's screen without enabling remote control.").foregroundStyle(.secondary)
-            Label("Voice · Microphone access is needed to talk. You can still join and listen without it.", systemImage: permissions.microphone ? "checkmark.circle.fill" : "mic")
-                .font(.callout).foregroundStyle(permissions.microphone ? Color.green : Color.primary)
-            Label("Screen sharing · Choose a display in Apple's picker each time. No separate Screen Recording setting is needed.", systemImage: "display")
-                .font(.callout).foregroundStyle(.secondary)
-            Label("Remote control · Accessibility is optional and is needed only on the Mac being controlled.", systemImage: permissions.accessibility ? "checkmark.circle.fill" : "cursorarrow.motionlines")
-                .font(.callout).foregroundStyle(permissions.accessibility ? Color.green : Color.primary)
-            row("Microphone", detail: "Allow Pairwise to send your voice during a call.", ready: permissions.microphone) { if permissions.microphone { permissions.open("Privacy_Microphone") } else { Task { await permissions.requestMicrophone() } } }
-            row("Remote control", detail: "Allow a teammate to use mouse and keyboard while you share your display. You can stop control at any time.", ready: permissions.accessibility) { if permissions.accessibility { permissions.open("Privacy_Accessibility") } else { permissions.requestAccessibility() } }
-            Text("Settings labels and placement vary by macOS version. If the Accessibility page does not open directly, search System Settings for ‘Accessibility’ and find the list of apps allowed to control your Mac.").font(.caption).foregroundStyle(.secondary)
-            Text("Stop remote control in the menu bar or press Control–Option–Escape at any time. If you enable Accessibility while sharing a display, return to PairDesk; control becomes available automatically.").font(.caption)
-            Text("If System Settings shows PairDesk as enabled but input still does not work, check that the enabled entry matches the copy in Applications. Remove any stale PairDesk entry and add the Applications copy, then quit and reopen PairDesk. Development builds may need permission approval again after an update.").font(.caption).foregroundStyle(.secondary)
-            Text("App signature: \(signingSummary)").font(.caption.monospaced()).textSelection(.enabled)
-            Text(appCopyLocation.guidance).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            Text("Development builds are ad-hoc signed and may need fresh approval after an update. A stable Developer ID signed release is required for normal distribution.").font(.caption).foregroundStyle(.secondary)
+            Text("PairDesk asks for access only when you use the related feature. You can call and view a teammate's screen without enabling remote control.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            row("Microphone", detail: "Needed to talk. You can still join a call and listen without it.", ready: permissions.microphone) { if permissions.microphone { permissions.open("Privacy_Microphone") } else { Task { await permissions.requestMicrophone() } } }
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "display").foregroundStyle(.secondary).frame(width: 20)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Screen sharing").bold()
+                    Text("Choose a display or window in Apple's picker each time. No separate Screen Recording setting is needed.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            row("Remote control", detail: "Optional, and needed only on the Mac being shared. Lets a teammate use your mouse and keyboard. Stop it from the menu bar or press Control–Option–Escape at any time.", ready: permissions.accessibility) { if permissions.accessibility { permissions.open("Privacy_Accessibility") } else { permissions.requestAccessibility() } }
+            DisclosureGroup("Troubleshooting") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("If you enable Accessibility while sharing a display, return to PairDesk; control becomes available automatically.")
+                    Text("Settings labels and placement vary by macOS version. If the Accessibility page does not open directly, search System Settings for ‘Accessibility’ and find the list of apps allowed to control your Mac.")
+                    Text("If System Settings shows PairDesk as enabled but input still does not work, check that the enabled entry matches the copy in Applications. Remove any stale PairDesk entry and add the Applications copy, then quit and reopen PairDesk.")
+                    Text("Development builds are ad-hoc signed, so macOS treats every new build as a different app: permissions and the saved sign-in may need approval again after an update. A stable Developer ID signed release is required for normal distribution.")
+                    Text(appCopyLocation.guidance).textSelection(.enabled)
+                    Text("App signature: \(signingSummary)").font(.caption.monospaced()).textSelection(.enabled)
+                }.font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 8)
+            }.font(.callout)
             HStack { Button("Check again") { permissions.refresh() }; Spacer(); Button("Done") { PermissionWindowController.shared.close(); dismiss() } }
         }.padding(26).frame(width: 490)
         .task {
@@ -117,7 +125,7 @@ struct PermissionsView: View {
     }
     private func row(_ title: String, detail: String, ready: Bool, action: @escaping () -> Void) -> some View {
         HStack(alignment: .top, spacing: 14) {
-            Image(systemName: ready ? "checkmark.circle.fill" : "circle").foregroundStyle(ready ? Color.green : Color.secondary)
+            Image(systemName: ready ? "checkmark.circle.fill" : "circle").foregroundStyle(ready ? Color.green : Color.secondary).frame(width: 20)
             VStack(alignment: .leading, spacing: 5) { Text(title).bold(); Text(detail).font(.caption).foregroundStyle(.secondary) }
             Spacer()
             Button(ready ? "Settings" : "Allow", action: action)
@@ -136,6 +144,8 @@ final class PermissionWindowController {
         PermissionManager.shared.refresh()
         if window == nil {
             let controller = NSHostingController(rootView: PermissionsView())
+            // Track the view's size so expanding Troubleshooting grows the window.
+            controller.sizingOptions = [.preferredContentSize]
             let created = NSWindow(contentViewController: controller)
             created.title = "PairDesk permissions"
             created.styleMask = [.titled, .closable]
