@@ -55,7 +55,13 @@ final class AppStore: ObservableObject {
         }.store(in: &subscriptions)
         rtc.$participants.sink { [weak self] participants in
             guard let self else { return }
-            if participants.contains(where: { !$0.isLocal }) { self.hadRemoteParticipant = true }
+            if participants.contains(where: { !$0.isLocal }) {
+                self.hadRemoteParticipant = true
+                // Private rooms admit the target only after acceptance, so a
+                // remote participant means the call connected. Start talking
+                // now instead of waiting for the next invitation poll.
+                if self.autoVoiceCallID != nil, self.activeRoom != nil { Task { await self.startAutoVoice() } }
+            }
             else if self.hadRemoteParticipant, self.activeRoom != nil {
                 Task { await self.leave() }
             }
@@ -210,13 +216,7 @@ final class AppStore: ObservableObject {
                 guard oldStatuses[invitation.id] == "pending", invitation.status != "pending" else { continue }
                 if invitation.status == "accepted", activeRoom?.id == invitation.room.id {
                     callMessage = "\(invitation.target.name) accepted your call."
-                    if autoVoiceCallID == invitation.id {
-                        autoVoiceCallID = nil
-                        if !startCallsMuted {
-                            do { try await rtc.setMicrophoneEnabled(true) }
-                            catch { self.error = error.localizedDescription }
-                        }
-                    }
+                    if autoVoiceCallID == invitation.id { await startAutoVoice() }
                 } else if ["declined", "expired", "cancelled"].contains(invitation.status) {
                     callMessage = invitation.status == "declined" ? "\(invitation.target.name) declined the call." : "Call to \(invitation.target.name) ended unanswered."
                     if activeRoom?.id == invitation.room.id, rtc.participants.count <= 1, outgoingCalls.isEmpty { await leave() }
@@ -247,13 +247,19 @@ final class AppStore: ObservableObject {
             await refreshInvitations()
             if autoVoiceCallID == response.call.id, activeRoom?.id == response.call.room.id,
                callInvitations.contains(where: { $0.room.id == response.call.room.id && $0.status == "accepted" }) {
-                autoVoiceCallID = nil
-                if !startCallsMuted && !rtc.isMicrophoneEnabled {
-                    do { try await rtc.setMicrophoneEnabled(true) }
-                    catch { self.error = error.localizedDescription }
-                }
+                await startAutoVoice()
             }
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// Enables the microphone once for a call this client started, unless the
+    /// person chose to start calls muted.
+    private func startAutoVoice() async {
+        guard autoVoiceCallID != nil, activeRoom != nil else { return }
+        autoVoiceCallID = nil
+        guard !startCallsMuted, !rtc.isMicrophoneEnabled else { return }
+        do { try await rtc.setMicrophoneEnabled(true) }
+        catch { self.error = error.localizedDescription }
     }
 
     func acceptCall(_ invitation: CallInvitation) async {
@@ -320,7 +326,10 @@ final class AppStore: ObservableObject {
             guard generation == attempt else { await rtc.disconnect(); return }
             transcripts.clear()
             activeRoom = join.room
-            await refresh()
+            // Join already refreshed this member's reservation. Update the
+            // roster without holding up the microphone behind three more
+            // API round trips.
+            Task { await self.refresh() }
         } catch {
             await rtc.disconnect()
             try? await api.send("v1/rooms/\(room.id)/leave", body: EmptyBody())
