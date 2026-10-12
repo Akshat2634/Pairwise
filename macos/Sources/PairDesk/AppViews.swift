@@ -78,9 +78,10 @@ struct SharedScreenWindow: View {
         case .requesting:
             return "Connecting remote control…"
         case .viewer:
-            return rtc.remoteControlAvailable
-                ? "Viewing \(rtc.participantName(for: sharer)) · control available"
-                : "Viewing \(rtc.participantName(for: sharer)) · view only"
+            let host = rtc.participantName(for: sharer)
+            if rtc.remoteControlAvailable { return "Viewing \(host) · click or type to control" }
+            if let reason = rtc.remoteControlUnavailableReason { return "Viewing \(host) · \(reason.viewerDescription(host: host))" }
+            return "Viewing \(host) · view only"
         case .host:
             return "You are sharing your display"
         case .unavailable:
