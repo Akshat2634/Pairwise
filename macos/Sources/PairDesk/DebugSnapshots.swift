@@ -46,10 +46,36 @@ enum UISnapshots {
             $0.callInvitations = [invitation(from: harshit, to: me)]
         }
 
-        snapshot("menu-signed-out", to: directory) { MenuBarPanel(store: signedOut, rtc: signedOut.rtc, loginItem: loginItem) }
-        snapshot("menu-roster", to: directory) { MenuBarPanel(store: idle, rtc: idle.rtc, loginItem: loginItem) }
-        snapshot("menu-ringing", to: directory) { MenuBarPanel(store: ringing, rtc: ringing.rtc, loginItem: loginItem) }
-        snapshot("menu-incoming", to: directory) { MenuBarPanel(store: incoming, rtc: incoming.rtc, loginItem: loginItem) }
+        snapshot("menu-signed-out", to: directory, compact: true) { MenuBarPanel(store: signedOut, rtc: signedOut.rtc, loginItem: loginItem) }
+        snapshot("menu-roster", to: directory, compact: true) { MenuBarPanel(store: idle, rtc: idle.rtc, loginItem: loginItem) }
+        let pair = store {
+            $0.user = me; $0.directoryStatus = "Team connected"
+            $0.users = [me, harshit, TeamUser(id: "saurab", name: "Saurab", email: "saurab@example.com", online: false, busy: false, enabled: true)]
+        }
+        snapshot("menu-roster-two", to: directory, compact: true) { MenuBarPanel(store: pair, rtc: pair.rtc, loginItem: loginItem) }
+        let crowd = store {
+            $0.user = me; $0.directoryStatus = "Team connected"
+            $0.users = [me] + (1...14).map { TeamUser(id: "t\($0)", name: "Teammate \($0)", email: "t\($0)@example.com", online: $0 <= 6, busy: $0 == 2, enabled: true) }
+        }
+        snapshot("menu-roster-many", to: directory, compact: true) { MenuBarPanel(store: crowd, rtc: crowd.rtc, loginItem: loginItem) }
+        snapshot("menu-ringing", to: directory, compact: true) { MenuBarPanel(store: ringing, rtc: ringing.rtc, loginItem: loginItem) }
+        snapshot("menu-incoming", to: directory, compact: true) { MenuBarPanel(store: incoming, rtc: incoming.rtc, loginItem: loginItem) }
+        let inCall = store {
+            $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
+            $0.activeRoom = room; $0.callStartedAt = Date().addingTimeInterval(-185)
+            $0.rtc.debugSetCall(participants: [CallParticipant(identity: me.id, name: me.name, isLocal: true),
+                                               CallParticipant(identity: harshit.id, name: harshit.name, isLocal: false, isSpeaking: true)],
+                                microphoneEnabled: true)
+        }
+        snapshot("menu-in-call", to: directory, compact: true) { MenuBarPanel(store: inCall, rtc: inCall.rtc, loginItem: loginItem) }
+        let muted = store {
+            $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
+            $0.activeRoom = room; $0.callStartedAt = Date().addingTimeInterval(-62)
+            $0.rtc.debugSetCall(participants: [CallParticipant(identity: me.id, name: me.name, isLocal: true),
+                                               CallParticipant(identity: harshit.id, name: harshit.name, isLocal: false)],
+                                microphoneEnabled: false)
+        }
+        snapshot("menu-in-call-muted", to: directory, compact: true) { MenuBarPanel(store: muted, rtc: muted.rtc, loginItem: loginItem) }
         snapshot("window-incoming-call", to: directory) { IncomingCallView(store: incoming) }
         snapshot("window-sign-in", to: directory) { RootView(store: signedOut).environmentObject(loginItem) }
         snapshot("window-signed-in", to: directory) { RootView(store: idle).environmentObject(loginItem) }
@@ -62,12 +88,18 @@ enum UISnapshots {
         print("Rendered UI snapshots to \(directory.path)")
     }
 
-    private static func snapshot<V: View>(_ name: String, to directory: URL, size: CGSize? = nil, @ViewBuilder _ content: () -> V) {
-        let host = NSHostingView(rootView: content()
+    /// `compact` renders at the smallest height the view accepts, which is
+    /// what MenuBarExtra's window settles on; ideal-height renders hide
+    /// views that collapse there.
+    private static func snapshot<V: View>(_ name: String, to directory: URL, size: CGSize? = nil, compact: Bool = false, @ViewBuilder _ content: () -> V) {
+        let view = content()
             .background(Color(nsColor: .windowBackgroundColor))
-            .preferredColorScheme(.dark))
+            .preferredColorScheme(.dark)
+        let host = NSHostingView(rootView: view)
         host.appearance = NSAppearance(named: .darkAqua)
-        let frame = NSRect(origin: .zero, size: size ?? host.fittingSize)
+        let ideal = host.fittingSize
+        let compactSize = compact ? NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: ideal.width, height: 0)) : ideal
+        let frame = NSRect(origin: .zero, size: size ?? compactSize)
         let window = NSWindow(contentRect: frame.offsetBy(dx: -20_000, dy: -20_000), styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = host.appearance
