@@ -55,4 +55,10 @@ final class AppTests: XCTestCase {
         let join = try JSONDecoder().decode(JoinResponse.self, from: data)
         XCTAssertEqual(join.participantIdentity, join.room.participants.first?.id)
     }
+    func testHostAccessibilityBlockIsReportedOverControlChannel() throws {
+        let message = RemoteControlMessage(epoch: "", sequence: 1, kind: .hostPermissionRequired)
+        let decoded = try JSONDecoder().decode(RemoteControlMessage.self, from: JSONEncoder().encode(message))
+        XCTAssertEqual(decoded.kind, .hostPermissionRequired)
+        XCTAssertFalse(RemoteControlState.hostPermissionRequired.isGranted)
+    }
 }

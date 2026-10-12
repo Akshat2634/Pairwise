@@ -69,9 +69,11 @@ struct SharedScreenWindow: View {
             return "You have control of \(rtc.participantName(for: sharer))'s Mac"
         case .requesting:
             return "Connecting remote control…"
+        case .hostPermissionRequired:
+            return "Ask \(rtc.participantName(for: sharer)) to enable Accessibility, then try again"
         case .viewer:
             let host = rtc.participantName(for: sharer)
-            if rtc.remoteControlAvailable { return "Viewing \(host) · click or type to control" }
+            if rtc.remoteControlAvailable { return "Viewing \(host) · move or click to request control" }
             if let reason = rtc.remoteControlUnavailableReason { return "Viewing \(host) · \(reason.viewerDescription(host: host))" }
             return "Viewing \(host) · view only"
         case .host:

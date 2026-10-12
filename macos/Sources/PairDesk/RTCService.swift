@@ -84,6 +84,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var heldKeys = Set<UInt16>()
     private var heldButtons = Set<Int>()
     private var lastPointerSentAt: TimeInterval = 0
+    private var lastControlRequestAt: TimeInterval = -.infinity
     private var inputMonitor: Any?
     private var localInputMonitor: Any?
     private var notificationTokens: [NSObjectProtocol] = []
@@ -392,8 +393,10 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     func requestControl() {
-        guard connected, !controlTransportFailed, remoteControlAvailable, let host = activeSharerIdentity,
-              host != localIdentity, case .viewer = controlState else { return }
+        guard canRequestRemoteControl,
+              controlState == .viewer || controlState == .hostPermissionRequired,
+              ProcessInfo.processInfo.systemUptime - lastControlRequestAt >= 1 else { return }
+        lastControlRequestAt = ProcessInfo.processInfo.systemUptime
         controlState = .requesting
         sendControl(.init(epoch: "", sequence: nextSequence(), kind: .request))
         // An older host ignores requests it cannot grant; don't show
@@ -807,7 +810,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         CGEventFlags.maskCommand.rawValue | CGEventFlags.maskSecondaryFn.rawValue
 
     private var controlGateIdentity: String? { controlGate.driverIdentity }
-    private var canRequestRemoteControl: Bool {
+    var canRequestRemoteControl: Bool {
         connected && remoteControlAvailable && activeSharerIdentity != nil && activeSharerIdentity != localIdentity
     }
 
@@ -826,9 +829,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         case .request:
             guard isSharing, sender != localIdentity else { return }
             guard !shareIsWindow, automaticControlEnabled else {
-                // Revoke ends an older viewer's wait; availability tells a
-                // newer one why, so it stops showing control as available.
-                sendControl(.init(epoch: "", sequence: nextSequence(), kind: .revoke), to: sender)
+                // Revoke, or hostPermissionRequired, ends an older viewer's wait;
+                // availability tells a newer one why, so it stops showing
+                // control as available.
+                let kind: RemoteControlMessage.Kind = AXIsProcessTrusted() ? .revoke : .hostPermissionRequired
+                sendControl(.init(epoch: "", sequence: nextSequence(), kind: kind), to: sender)
                 sendControlAvailability(to: sender)
                 return
             }
@@ -877,6 +882,17 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             localHeldKeys.removeAll()
             localHeldButtons.removeAll()
             controlState = .viewer
+        case .hostPermissionRequired:
+            guard sender == activeSharerIdentity, case .requesting = controlState else { return }
+            localControllerEpoch = nil
+            heartbeatTask?.cancel()
+            heartbeatTask = nil
+            controllerIdleTask?.cancel()
+            controllerIdleTask = nil
+            queuedLocalIntents.removeAll()
+            localHeldKeys.removeAll()
+            localHeldButtons.removeAll()
+            controlState = .hostPermissionRequired
         case .heartbeat, .pointer, .key, .button, .scroll, .releaseAll, .release:
             guard isSharing,
                   controlGate.accept(message, sender: sender),

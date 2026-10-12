@@ -15,6 +15,7 @@ enum RemoteControlState: Equatable {
     case unavailable
     case viewer
     case requesting
+    case hostPermissionRequired
     case host
     case granted(identity: String, expiresAt: Date)
 }
@@ -28,7 +29,7 @@ extension RemoteControlState {
 struct RemoteControlMessage: Codable, Equatable {
     /// Clients ignore messages whose kind they cannot decode, so adding a kind
     /// stays compatible with older builds.
-    enum Kind: String, Codable { case request, grant, revoke, release, heartbeat, pointer, key, button, scroll, releaseAll, availability }
+    enum Kind: String, Codable { case request, grant, revoke, hostPermissionRequired, release, heartbeat, pointer, key, button, scroll, releaseAll, availability }
     var version: Int = 1
     var epoch: String
     var sequence: UInt64
