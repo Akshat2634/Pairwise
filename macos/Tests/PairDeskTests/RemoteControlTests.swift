@@ -107,4 +107,46 @@ final class RemoteControlTests: XCTestCase {
     private func message(epoch: String, seq: UInt64, kind: RemoteControlMessage.Kind = .pointer) -> RemoteControlMessage {
         RemoteControlMessage(epoch: epoch, sequence: seq, kind: kind, x: 0.5, y: 0.5)
     }
+
+    func testIndependentHoverDoesNotDriveTheOSCursorButDragDoes() {
+        XCTAssertFalse(IndependentCursorPolicy.movesSystemCursor(independent: true, heldButtonCount: 0))
+        XCTAssertTrue(IndependentCursorPolicy.movesSystemCursor(independent: true, heldButtonCount: 1))
+        XCTAssertTrue(IndependentCursorPolicy.movesSystemCursor(independent: false, heldButtonCount: 0))
+    }
+
+    func testCursorPresenceRequiresCurrentShareAuthenticatedSenderAndNewSequence() {
+        let cursor = RemoteControlMessage(epoch: "share-2", sequence: 4, kind: .cursor, x: 0.4, y: 0.7, visible: true)
+        XCTAssertTrue(IndependentCursorPolicy.accepts(cursor, session: "share-2", isParticipant: true, lastSequence: 3))
+        XCTAssertFalse(IndependentCursorPolicy.accepts(cursor, session: "share-1", isParticipant: true, lastSequence: 3))
+        XCTAssertFalse(IndependentCursorPolicy.accepts(cursor, session: "share-2", isParticipant: false, lastSequence: 3))
+        XCTAssertFalse(IndependentCursorPolicy.accepts(cursor, session: "share-2", isParticipant: true, lastSequence: 4))
+        XCTAssertFalse(IndependentCursorPolicy.accepts(cursor, session: nil, isParticipant: true, lastSequence: nil))
+    }
+
+    func testCursorPresenceRejectsInvalidPointsAndAcceptsExplicitLeave() {
+        var cursor = RemoteControlMessage(epoch: "share", sequence: 2, kind: .cursor, x: .nan, y: 0.7)
+        XCTAssertFalse(IndependentCursorPolicy.accepts(cursor, session: "share", isParticipant: true, lastSequence: 1))
+        cursor.x = 1.1
+        XCTAssertFalse(IndependentCursorPolicy.accepts(cursor, session: "share", isParticipant: true, lastSequence: 1))
+        cursor.visible = false; cursor.x = nil; cursor.y = nil
+        XCTAssertTrue(IndependentCursorPolicy.accepts(cursor, session: "share", isParticipant: true, lastSequence: 1))
+    }
+
+    func testCursorOverlayUsesSelectedDisplayGlobalCoordinates() {
+        let leftDisplay = CGRect(x: -1440, y: 120, width: 1440, height: 900)
+        XCTAssertEqual(IndependentCursorPolicy.appKitFrame(for: leftDisplay, primaryScreenTop: 1080),
+                       CGRect(x: -1440, y: 60, width: 1440, height: 900))
+        let lowerDisplay = CGRect(x: 0, y: 1080, width: 1920, height: 1080)
+        XCTAssertEqual(IndependentCursorPolicy.appKitFrame(for: lowerDisplay, primaryScreenTop: 1080),
+                       CGRect(x: 0, y: -1080, width: 1920, height: 1080))
+    }
+
+    func testOwnerActivityTemporarilyBlocksInputWithoutBecomingPermissionFailure() {
+        let state = RemoteControlAvailability.evaluate(sharingWindow: false, accessibilityTrusted: true,
+                                                       automaticControlEnabled: true, ownerActive: true)
+        XCTAssertFalse(state.available); XCTAssertEqual(state.reason, .ownerActive)
+        let ready = RemoteControlAvailability.evaluate(sharingWindow: false, accessibilityTrusted: true,
+                                                       automaticControlEnabled: true, ownerActive: false)
+        XCTAssertTrue(ready.available)
+    }
 }

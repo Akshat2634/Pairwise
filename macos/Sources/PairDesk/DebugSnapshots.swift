@@ -85,6 +85,20 @@ enum UISnapshots {
         snapshot("window-shared-screen", to: directory, size: CGSize(width: 1000, height: 620)) {
             SharedScreenWindow(store: ringing, rtc: ringing.rtc, transcripts: ringing.transcripts)
         }
+        snapshot("separate-cursors", to: directory, size: CGSize(width: 1000, height: 620)) {
+            ZStack {
+                Color(nsColor: .windowBackgroundColor)
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Separate cursors").font(.title2.bold())
+                    Text("Move independently. Click, drag, scroll and type one at a time.").foregroundStyle(.secondary)
+                    Spacer()
+                }.padding(28).frame(maxWidth: .infinity, alignment: .leading)
+                SharedCursorLayer(pointers: [RemotePointer(id: "harshit", x: 0.32, y: 0.35, updatedAt: .now),
+                                            RemotePointer(id: "bharat", x: 0.65, y: 0.58, updatedAt: .now),
+                                            RemotePointer(id: "saurab", x: 0.96, y: 0.94, updatedAt: .now)],
+                                  names: ["harshit": "Harshit", "bharat": "Bharat", "saurab": "Saurab"])
+            }
+        }
         print("Rendered UI snapshots to \(directory.path)")
     }
 
