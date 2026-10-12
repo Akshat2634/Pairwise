@@ -73,7 +73,7 @@ struct SharedScreenWindow: View {
             return "Ask \(rtc.participantName(for: sharer)) to enable Accessibility, then try again"
         case .viewer:
             let host = rtc.participantName(for: sharer)
-            if rtc.remoteControlAvailable { return "Viewing \(host) · click or type to control" }
+            if rtc.remoteControlAvailable { return "Viewing \(host) · \(rtc.usesIndependentCursors ? "separate cursors · " : "")click or type to control" }
             if let reason = rtc.remoteControlUnavailableReason { return "Viewing \(host) · \(reason.viewerDescription(host: host))" }
             return "Viewing \(host) · view only"
         case .host:
@@ -114,7 +114,7 @@ struct SharedScreenWindow: View {
                         InteractiveScreenView(track: track, rtc: rtc)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .overlay {
-                                if let dimensions = track.dimensions {
+                                if !rtc.usesIndependentCursors, let dimensions = track.dimensions {
                                     GeometryReader { geometry in
                                         let contentSize = CGSize(width: Int(dimensions.width), height: Int(dimensions.height))
                                         ForEach(rtc.remotePointers) { pointer in

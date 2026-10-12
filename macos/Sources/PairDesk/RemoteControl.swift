@@ -28,7 +28,7 @@ extension RemoteControlState {
 /// encoded: the receiver must use LiveKit's authenticated participant identity.
 struct RemoteControlMessage: Codable, Equatable {
     /// Unknown kinds are ignored by older clients.
-    enum Kind: String, Codable { case request, grant, revoke, hostPermissionRequired, release, heartbeat, pointer, key, button, scroll, releaseAll, availability }
+    enum Kind: String, Codable { case request, grant, revoke, hostPermissionRequired, release, heartbeat, pointer, key, button, scroll, releaseAll, availability, cursor }
     var version: Int = 1
     var epoch: String
     var sequence: UInt64
@@ -44,18 +44,25 @@ struct RemoteControlMessage: Codable, Equatable {
     /// `.availability` only: whether the sharer would accept input now, and why not.
     var available: Bool?
     var reason: String?
+    /// Display shares advertise an epoch for independent, non-controlling cursors.
+    var cursorSession: String?
+    var visible: Bool?
 }
 
 enum RemoteControlUnavailableReason: String, Codable, Equatable {
     case accessibility
     case paused
     case windowShare
+    case ownerActive
+    case displayGeometry
 
     func viewerDescription(host: String) -> String {
         switch self {
         case .accessibility: "\(host) needs to allow PairDesk in Accessibility before you can control"
         case .paused: "\(host) paused remote control"
         case .windowShare: "window sharing is view only"
+        case .ownerActive: "\(host) is using the mouse or keyboard · try again in a moment"
+        case .displayGeometry: "the selected display could not be mapped safely for remote control"
         }
     }
 }
@@ -64,11 +71,34 @@ enum RemoteControlUnavailableReason: String, Codable, Equatable {
 /// the track name, and would show "control available" for a Mac that cannot
 /// accept input.
 enum RemoteControlAvailability {
-    static func evaluate(sharingWindow: Bool, accessibilityTrusted: Bool, automaticControlEnabled: Bool) -> (available: Bool, reason: RemoteControlUnavailableReason?) {
+    static func evaluate(sharingWindow: Bool, accessibilityTrusted: Bool, automaticControlEnabled: Bool, ownerActive: Bool = false, displayGeometryKnown: Bool = true) -> (available: Bool, reason: RemoteControlUnavailableReason?) {
         if sharingWindow { return (false, .windowShare) }
+        if !displayGeometryKnown { return (false, .displayGeometry) }
         if !accessibilityTrusted { return (false, .accessibility) }
         if !automaticControlEnabled { return (false, .paused) }
+        if ownerActive { return (false, .ownerActive) }
         return (true, nil)
+    }
+}
+
+enum IndependentCursorPolicy {
+    /// Hover is presence, never an OS mouse move or a control request.
+    static func movesSystemCursor(independent: Bool, heldButtonCount: Int) -> Bool {
+        !independent || heldButtonCount > 0
+    }
+
+    static func accepts(_ message: RemoteControlMessage, session: String?, isParticipant: Bool, lastSequence: UInt64?) -> Bool {
+        guard isParticipant, message.version == 1, message.kind == .cursor,
+              let session, !session.isEmpty, message.epoch == session,
+              message.sequence > (lastSequence ?? 0) else { return false }
+        if message.visible == false { return true }
+        guard let x = message.x, let y = message.y else { return false }
+        return x.isFinite && y.isFinite && (0...1).contains(x) && (0...1).contains(y)
+    }
+
+    /// Core Graphics uses top-left coordinates; AppKit uses bottom-left.
+    static func appKitFrame(for bounds: CGRect, primaryScreenTop: CGFloat) -> CGRect {
+        CGRect(x: bounds.minX, y: primaryScreenTop - bounds.maxY, width: bounds.width, height: bounds.height)
     }
 }
 
@@ -160,6 +190,13 @@ struct RemoteControlGate {
 enum RemoteInputInjector {
     static let eventMarker: Int64 = 0x504149524445534B
 
+    static var currentPointerPosition: CGPoint? { CGEvent(source: nil)?.location }
+
+    static func restorePointer(to point: CGPoint) {
+        guard AXIsProcessTrusted(), point.x.isFinite, point.y.isFinite else { return }
+        _ = CGWarpMouseCursorPosition(point)
+    }
+
     static func point(x: Double, y: Double, in bounds: CGRect) -> CGPoint? {
         guard x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y),
               bounds.minX.isFinite, bounds.minY.isFinite,
@@ -217,7 +254,7 @@ enum RemoteInputInjector {
         return true
     }
 
-    static func scroll(deltaX: Double, deltaY: Double) -> Bool {
+    static func scroll(deltaX: Double, deltaY: Double, at point: CGPoint? = nil) -> Bool {
         guard AXIsProcessTrusted(), deltaX.isFinite, deltaY.isFinite,
               abs(deltaX) <= 200, abs(deltaY) <= 200,
               let event = CGEvent(scrollWheelEvent2Source: nil,
@@ -227,6 +264,7 @@ enum RemoteInputInjector {
                                   wheel2: Int32(deltaX.rounded()),
                                   wheel3: 0)
         else { return false }
+        if let point { event.location = point }
         event.setIntegerValueField(.eventSourceUserData, value: eventMarker)
         event.post(tap: .cgSessionEventTap)
         return true

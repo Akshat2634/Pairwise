@@ -48,6 +48,25 @@ final class CallIntegrationTests: XCTestCase {
             await fulfillment(of: [receiver.expectation], timeout: 10)
             XCTAssertEqual(receiver.received, payload)
             XCTAssertEqual(receiver.sender, media[0].localParticipant.identity?.stringValue)
+            // Independent hover uses an authenticated, lossy packet addressed
+            // only to the sharing Mac, without any control lease.
+            let cursorReceiver = DataReceiver(expectation: expectation(description: "Independent cursor delivered to host"), topic: "pairdesk.control.v1")
+            let bystanderExpectation = expectation(description: "Cursor is not broadcast to bystander")
+            bystanderExpectation.isInverted = true
+            let bystander = DataReceiver(expectation: bystanderExpectation, topic: "pairdesk.control.v1")
+            media[0].add(delegate: cursorReceiver)
+            media[2].add(delegate: bystander)
+            let hostID = try XCTUnwrap(media[0].localParticipant.identity)
+            let cursor = RemoteControlMessage(epoch: "fixture-share", sequence: 1, kind: .cursor, x: 0.25, y: 0.75, visible: true)
+            try await media[1].localParticipant.publish(data: JSONEncoder().encode(cursor), options: DataPublishOptions(destinationIdentities: [hostID], topic: "pairdesk.control.v1", reliable: false))
+            await fulfillment(of: [cursorReceiver.expectation], timeout: 5)
+            let receivedCursor = try JSONDecoder().decode(RemoteControlMessage.self, from: XCTUnwrap(cursorReceiver.received))
+            XCTAssertEqual(receivedCursor, cursor)
+            XCTAssertEqual(cursorReceiver.sender, media[1].localParticipant.identity?.stringValue)
+            XCTAssertTrue(IndependentCursorPolicy.accepts(receivedCursor, session: "fixture-share", isParticipant: true, lastSequence: nil))
+            await fulfillment(of: [bystanderExpectation], timeout: 0.5)
+            media[0].remove(delegate: cursorReceiver)
+            media[2].remove(delegate: bystander)
             do {
                 let _: JoinResponse = try await clients[4].post("v1/rooms/\(roomID)/join", body: EmptyBody())
                 XCTFail("A fifth member was admitted")
@@ -127,14 +146,15 @@ private final class SyntheticVideoReceiver: NSObject, RoomDelegate, VideoRendere
 
 private final class DataReceiver: RoomDelegate, @unchecked Sendable {
     let expectation: XCTestExpectation
+    private let topic: String
     private let lock = NSLock()
     private var storedData: Data?
     private var storedSender: String?
     var received: Data? { lock.lock(); defer { lock.unlock() }; return storedData }
     var sender: String? { lock.lock(); defer { lock.unlock() }; return storedSender }
-    init(expectation: XCTestExpectation) { self.expectation = expectation }
+    init(expectation: XCTestExpectation, topic: String = "pairdesk.test") { self.expectation = expectation; self.topic = topic }
     func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data, forTopic topic: String, encryptionType: EncryptionType) {
-        guard topic == "pairdesk.test", let participant else { return }
+        guard topic == self.topic, let participant else { return }
         lock.lock()
         guard storedData == nil else { lock.unlock(); return }
         storedData = data

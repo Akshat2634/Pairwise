@@ -12,10 +12,12 @@ struct InteractiveScreenView: NSViewRepresentable {
         // this, a denied first request leaves no path to request again after
         // Accessibility is enabled during the same share.
         view.driving = rtc.canRequestRemoteControl
+        view.independentCursor = rtc.usesIndependentCursors
         view.needsLayout = true
     }
     static func dismantleNSView(_ view: ScreenCanvas, coordinator: ()) {
         if view.driving { view.rtc?.releaseHeldInputs() }
+        view.stopCursorPresence()
         view.video.track = nil
     }
 }
@@ -25,6 +27,12 @@ final class ScreenCanvas: NSView {
     let video = VideoView()
     weak var rtc: RTCService?
     var driving = false { didSet { if !driving && oldValue { window?.makeFirstResponder(nil) } } }
+    var independentCursor = false {
+        didSet { if independentCursor != oldValue { window?.invalidateCursorRects(for: self) } }
+    }
+    private var lastCursorPoint: CGPoint?
+    private var cursorPresenceTask: Task<Void, Never>?
+    private static let transparentCursor = NSCursor(image: NSImage(size: NSSize(width: 16, height: 16)), hotSpot: .zero)
     private var tracking: NSTrackingArea?
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -37,11 +45,20 @@ final class ScreenCanvas: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
     override func layout() { super.layout(); video.frame = bounds }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        // The sharing Mac renders the coloured pointer into the video. Hide
+        // the viewer's OS pointer only inside the canvas to avoid a duplicate.
+        if independentCursor, let dimensions = video.track?.dimensions,
+           let content = ScreenCoordinateMapper.contentRect(container: bounds, contentSize: CGSize(width: Int(dimensions.width), height: Int(dimensions.height))) {
+            addCursorRect(content, cursor: Self.transparentCursor)
+        } else { addCursorRect(bounds, cursor: .arrow) }
+    }
     override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(point) ? self : nil }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(area)
         tracking = area
     }
@@ -51,16 +68,36 @@ final class ScreenCanvas: NSView {
                                                   contentSize: CGSize(width: Int(dimensions.width), height: Int(dimensions.height)))
     }
     private func pointer(_ event: NSEvent) {
-        guard driving, let point = normalized(event) else { return }
+        guard driving || independentCursor, let point = normalized(event) else { return }
+        lastCursorPoint = point
+        startCursorPresence()
         rtc?.sendPointer(x: point.x, y: point.y)
+    }
+    override func mouseEntered(with event: NSEvent) { pointer(event) }
+    override func mouseExited(with event: NSEvent) { stopCursorPresence(); rtc?.releaseHeldInputs() }
+    private func startCursorPresence() {
+        guard independentCursor, cursorPresenceTask == nil else { return }
+        cursorPresenceTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, self.independentCursor, self.window?.isKeyWindow == true,
+                      let point = self.lastCursorPoint else { self?.stopCursorPresence(); return }
+                self.rtc?.sendCursor(x: point.x, y: point.y)
+            }
+        }
+    }
+    func stopCursorPresence() {
+        cursorPresenceTask?.cancel()
+        cursorPresenceTask = nil
+        lastCursorPoint = nil
+        rtc?.sendCursor(visible: false)
     }
     override func mouseMoved(with event: NSEvent) { pointer(event) }
     override func mouseDragged(with event: NSEvent) { dragPointer(event) }
     override func rightMouseDragged(with event: NSEvent) { dragPointer(event) }
     override func otherMouseDragged(with event: NSEvent) { dragPointer(event) }
     private func dragPointer(_ event: NSEvent) {
-        guard let point = normalized(event) else { return }
-        rtc?.sendPointer(x: point.x, y: point.y)
+        pointer(event)
     }
     override func mouseDown(with event: NSEvent) { press(event, down: true) }
     override func mouseUp(with event: NSEvent) { press(event, down: false) }
@@ -69,12 +106,13 @@ final class ScreenCanvas: NSView {
     override func otherMouseDown(with event: NSEvent) { press(event, down: true) }
     private func press(_ event: NSEvent, down: Bool) {
         guard let point = normalized(event), (0...2).contains(event.buttonNumber) else { return }
+        if independentCursor { rtc?.sendCursor(x: point.x, y: point.y) }
         window?.makeFirstResponder(self)
         rtc?.sendButton(button: event.buttonNumber, down: down, x: point.x, y: point.y)
     }
     override func scrollWheel(with event: NSEvent) {
-        guard normalized(event) != nil else { return }
-        rtc?.sendScroll(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY)
+        guard let point = normalized(event) else { return }
+        rtc?.sendScroll(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY, x: point.x, y: point.y)
     }
     override func keyDown(with event: NSEvent) {
         guard let rtc else { return }
@@ -82,7 +120,7 @@ final class ScreenCanvas: NSView {
         rtc.sendKey(code: event.keyCode, down: true, modifiers: UInt64(event.modifierFlags.rawValue))
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
+        guard driving, event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
         keyDown(with: event)
         return true
     }
@@ -105,6 +143,7 @@ final class ScreenCanvas: NSView {
     }
     override func resignFirstResponder() -> Bool {
         if driving { rtc?.releaseHeldInputs() }
+        stopCursorPresence()
         return true
     }
 }

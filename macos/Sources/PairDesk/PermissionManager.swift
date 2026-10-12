@@ -108,7 +108,7 @@ struct PermissionsView: View {
                     Text("If you enable Accessibility while sharing a display, return to PairDesk; control becomes available automatically.")
                     Text("Settings labels and placement vary by macOS version. If the Accessibility page does not open directly, search System Settings for ‘Accessibility’ and find the list of apps allowed to control your Mac.")
                     Text("If System Settings shows PairDesk as enabled but input still does not work, check that the enabled entry matches the copy in Applications. Remove any stale PairDesk entry and add the Applications copy, then quit and reopen PairDesk.")
-                    Text("Development builds are ad-hoc signed, so macOS treats every new build as a different app: permissions and the saved sign-in may need approval again after an update. A stable Developer ID signed release is required for normal distribution.")
+                    Text("Ad-hoc builds change their signing identity with every update and may need fresh approval. Builds made with the same local signing certificate can keep a stable identity, but normal distribution still requires Developer ID signing and notarization.")
                     Text(appCopyLocation.guidance).textSelection(.enabled)
                     Text("App signature: \(signingSummary)").font(.caption.monospaced()).textSelection(.enabled)
                 }.font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 8)

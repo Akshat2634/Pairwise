@@ -17,17 +17,28 @@ enum Theme {
 
     /// One stable color per person, shared by avatars and remote cursors.
     static func personColor(for id: String) -> Color {
-        let palette: [Color] = [
+        let palette = personPalette
+        let hash = id.utf8.reduce(UInt64(2_166_136_261)) { ($0 ^ UInt64($1)) &* 16_777_619 }
+        return palette[Int(hash % UInt64(palette.count))]
+    }
+
+    /// Assign cursors distinct colors within one share, even when stable
+    /// per-person avatar hashes happen to collide.
+    static func distinctPersonColors(for identifiers: [String]) -> [String: Color] {
+        let sorted = Array(Set(identifiers)).sorted()
+        return Dictionary(uniqueKeysWithValues: sorted.enumerated().map { index, id in
+            (id, personPalette[index % personPalette.count])
+        })
+    }
+
+    private static let personPalette: [Color] = [
             Color(red: 0x4C / 255, green: 0xA8 / 255, blue: 0x6B / 255),
             Color(red: 0x7C / 255, green: 0x6C / 255, blue: 0xE8 / 255),
             Color(red: 0xD9 / 255, green: 0x7A / 255, blue: 0x5B / 255),
             Color(red: 0xD4 / 255, green: 0xB0 / 255, blue: 0x3A / 255),
             Color(red: 0x5A / 255, green: 0x8E / 255, blue: 0xD0 / 255),
             Color(red: 0x3F / 255, green: 0xA9 / 255, blue: 0xA6 / 255)
-        ]
-        let hash = id.utf8.reduce(UInt64(2_166_136_261)) { ($0 ^ UInt64($1)) &* 16_777_619 }
-        return palette[Int(hash % UInt64(palette.count))]
-    }
+    ]
 
     static func initials(for name: String) -> String {
         name.split(separator: " ").prefix(2).compactMap { $0.first }.map(String.init).joined().uppercased()

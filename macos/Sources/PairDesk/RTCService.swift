@@ -19,7 +19,7 @@ private enum LocalControlIntent {
     case pointer(Double, Double)
     case key(UInt16, Bool, UInt64)
     case button(Int, Bool, Double, Double)
-    case scroll(Double, Double)
+    case scroll(Double, Double, Double?, Double?)
 }
 
 /// Owns one LiveKit room, local media and the consented remote-control lease.
@@ -40,6 +40,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var remoteControlUnavailableReason: RemoteControlUnavailableReason?
     @Published private(set) var automaticControlEnabled = false
     @Published private(set) var remotePointers: [RemotePointer] = []
+    @Published private(set) var cursorSessionID: String?
+    var usesIndependentCursors: Bool { !isSharing && cursorSessionID != nil }
+    var canPointAtRemoteScreen: Bool { connected && !isSharing && screenTrack != nil && activeSharerIdentity != nil }
     @Published private(set) var localIdentity: String?
     @Published private(set) var audioInputDevices: [AudioDevice] = []
     @Published private(set) var audioOutputDevices: [AudioDevice] = []
@@ -78,12 +81,24 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var controllerIdleTask: Task<Void, Never>?
     private var requestTimeoutTask: Task<Void, Never>?
     /// Availability can arrive before the screen track is subscribed.
-    private var controlAvailabilityBySender: [String: (available: Bool, reason: RemoteControlUnavailableReason?)] = [:]
+    private var controlAvailabilityBySender: [String: (available: Bool, reason: RemoteControlUnavailableReason?, cursorSession: String?)] = [:]
     private var leaseTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
     private var heldKeys = Set<UInt16>()
     private var heldButtons = Set<Int>()
     private var lastPointerSentAt: TimeInterval = 0
+    private var lastCursorSentAt: TimeInterval = 0
+    private var pendingCursorMessage: RemoteControlMessage?
+    private var cursorSendTask: Task<Void, Never>?
+    private var cursorSendTaskID: UUID?
+    private var cursorExpiryTask: Task<Void, Never>?
+    private var cursorSequenceBySender: [String: UInt64] = [:]
+    private var independentCursorParticipants = Set<String>()
+    private let cursorOverlay = SharedCursorOverlay()
+    private var ownerPointerPosition: CGPoint?
+    private var pointerRestoreTask: Task<Void, Never>?
+    private var ownerBusyUntil: TimeInterval = 0
+    private var ownerActivityTask: Task<Void, Never>?
     private var lastControlRequestAt: TimeInterval = -.infinity
     private var inputMonitor: Any?
     private var localInputMonitor: Any?
@@ -106,11 +121,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             Task { @MainActor [weak self] in self?.refreshAudioDevices(using: manager) }
         }
         refreshAudioDevices()
-        inputMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+        inputMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]) { [weak self] event in
             guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != RemoteInputInjector.eventMarker else { return }
             Task { @MainActor [weak self] in self?.handleLocalInput(event) }
         }
-        localInputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+        localInputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel]) { [weak self] event in
             guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != RemoteInputInjector.eventMarker else { return event }
             Task { @MainActor [weak self] in self?.handleLocalInput(event) }
             return event
@@ -186,6 +201,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         controlAvailabilityBySender.removeAll()
         remoteControlUnavailableReason = nil
         emergencyStop()
+        resetIndependentCursors()
         controlTransportFailed = true
         if let room {
             detachAudioRenderers()
@@ -312,8 +328,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         var pendingTrack: LocalVideoTrack?
         do {
             let selectedWindow = contentFilter.style == .window
-            let selectedFrame = contentFilter.contentRect
-            let canControlDisplay = AXIsProcessTrusted()
+            let selectedFrame: CGRect?
+            if #available(macOS 15.2, *), !selectedWindow, let display = contentFilter.includedDisplays.first {
+                selectedFrame = CGDisplayBounds(display.displayID)
+            } else if !selectedWindow, NSScreen.screens.count == 1 {
+                selectedFrame = contentFilter.contentRect
+            } else { selectedFrame = nil }
+            let canControlDisplay = selectedFrame != nil && AXIsProcessTrusted()
             // Older viewers infer view-only from the ".window" suffix; newer
             // ones also receive explicit availability messages.
             let trackName = selectedWindow ? "pairdesk.screen.window" : "pairdesk.screen.display"
@@ -332,6 +353,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             _ = try await room.localParticipant.publish(videoTrack: track, options: publishOptions)
             shareTrack = track
             shareBounds = selectedWindow ? nil : selectedFrame
+            cursorSessionID = selectedFrame == nil ? nil : UUID().uuidString
+            if let selectedFrame { cursorOverlay.show(in: selectedFrame) }
             shareIsWindow = selectedWindow
             remoteControlAvailable = !shareIsWindow && canControlDisplay
             remoteControlManuallyPaused = false
@@ -360,6 +383,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         accessibilityMonitorTask?.cancel()
         accessibilityMonitorTask = nil
         revokeControl()
+        resetIndependentCursors()
         guard let publication = room.localParticipant.localVideoTracks.first(where: { $0.track === track }) else {
             _ = try? await track.capturer.stopCapture()
             shareTrack = nil
@@ -398,7 +422,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
               ProcessInfo.processInfo.systemUptime - lastControlRequestAt >= 1 else { return }
         lastControlRequestAt = ProcessInfo.processInfo.systemUptime
         controlState = .requesting
-        sendControl(.init(epoch: "", sequence: nextSequence(), kind: .request))
+        sendControl(.init(epoch: "", sequence: nextSequence(), kind: .request,
+                          cursorSession: usesIndependentCursors ? cursorSessionID : nil))
         // An older host ignores requests it cannot grant; don't show
         // "Connecting remote control…" forever.
         requestTimeoutTask?.cancel()
@@ -407,6 +432,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             guard !Task.isCancelled, let self, case .requesting = self.controlState else { return }
             self.controlState = .viewer
             self.queuedLocalIntents.removeAll()
+            self.localHeldKeys.removeAll()
+            self.localHeldButtons.removeAll()
         }
     }
 
@@ -465,16 +492,21 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         guard isSharing else { return }
         let state = RemoteControlAvailability.evaluate(sharingWindow: shareIsWindow,
                                                        accessibilityTrusted: AXIsProcessTrusted(),
-                                                       automaticControlEnabled: automaticControlEnabled)
+                                                       automaticControlEnabled: automaticControlEnabled,
+                                                       ownerActive: ProcessInfo.processInfo.systemUptime < ownerBusyUntil,
+                                                       displayGeometryKnown: shareBounds != nil)
         sendControl(.init(epoch: "", sequence: nextSequence(), kind: .availability,
-                          available: state.available, reason: state.reason?.rawValue), to: identity)
+                          available: state.available, reason: state.reason?.rawValue,
+                          cursorSession: shareIsWindow ? nil : cursorSessionID), to: identity)
     }
 
     /// Viewer: prefer what the host said; fall back to the track name for older hosts.
     private func applyRemoteControlAvailability(from sender: String, trackName: String) {
         if let known = controlAvailabilityBySender[sender] {
+            cursorSessionID = known.cursorSession
             applyRemoteControlAvailability(known.available, reason: known.reason)
         } else {
+            cursorSessionID = nil
             let isWindow = trackName.hasSuffix(".window")
             applyRemoteControlAvailability(!isWindow, reason: isWindow ? .windowShare : nil)
         }
@@ -483,9 +515,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private func applyRemoteControlAvailability(_ available: Bool, reason: RemoteControlUnavailableReason?) {
         remoteControlAvailable = available
         remoteControlUnavailableReason = available ? nil : reason
+        if available { lastControlRequestAt = -.infinity }
         guard !available else { return }
         requestTimeoutTask?.cancel()
         queuedLocalIntents.removeAll()
+        localHeldKeys.removeAll()
+        localHeldButtons.removeAll()
+        if localControllerEpoch != nil { emergencyStop() }
         if case .requesting = controlState { controlState = .viewer }
     }
 
@@ -504,7 +540,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     private func refreshRemoteControlPermission() {
-        guard isSharing, !shareIsWindow, !controlTransportFailed else { return }
+        guard isSharing, !shareIsWindow, shareBounds != nil, !controlTransportFailed else { return }
         let trusted = AXIsProcessTrusted()
         if trusted && !remoteControlAvailable {
             remoteControlAvailable = true
@@ -557,13 +593,26 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     /// Call when a local owner uses the in-app shared-screen controls.
-    func localOwnerInputDetected() {
-        guard isSharing, controlGate.driverIdentity != nil,
-              !heldKeys.isEmpty || !heldButtons.isEmpty else { return }
-        if let driver = controlGate.driverIdentity, let epoch = controlGate.epoch {
-            sendControl(.init(epoch: epoch, sequence: nextSequence(), kind: .releaseAll), to: driver)
+    func localOwnerInputDetected(restorePointer: Bool = true) {
+        guard isSharing else { return }
+        ownerBusyUntil = ProcessInfo.processInfo.systemUptime + 0.4
+        // A physical owner action takes over immediately; do not warp over it.
+        pointerRestoreTask?.cancel()
+        if !restorePointer { ownerPointerPosition = nil }
+        let waiting = pendingControlRequests.map(\.identity)
+        revokeActiveLease(notifyDriver: true)
+        controlArbiter.disable()
+        if automaticControlEnabled { controlArbiter.enable() }
+        for identity in waiting { sendControl(.init(epoch: "", sequence: nextSequence(), kind: .revoke), to: identity) }
+        pendingControlRequests.removeAll()
+        controlState = .host
+        sendControlAvailability()
+        ownerActivityTask?.cancel()
+        ownerActivityTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(420)) } catch { return }
+            guard let self, self.isSharing else { return }
+            self.sendControlAvailability()
         }
-        releaseInjectedInputs()
     }
 
     /// Clears held keys/buttons on the host while keeping the lease alive.
@@ -578,6 +627,10 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
 
     func sendPointer(x: Double, y: Double) {
         guard !controlTransportFailed, x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) else { return }
+        if usesIndependentCursors {
+            sendCursor(x: x, y: y)
+            guard IndependentCursorPolicy.movesSystemCursor(independent: true, heldButtonCount: localHeldButtons.count) else { return }
+        }
         guard let epoch = localControllerEpoch else { queueIntent(.pointer(x, y)); return }
         beginActiveInput(epoch: epoch)
         let now = ProcessInfo.processInfo.systemUptime
@@ -611,12 +664,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                           code: UInt16(button), down: down))
     }
 
-    func sendScroll(dx: Double, dy: Double) {
+    func sendScroll(dx: Double, dy: Double, x: Double? = nil, y: Double? = nil) {
         guard !controlTransportFailed, dx.isFinite, dy.isFinite, abs(dx) <= 200, abs(dy) <= 200
         else { return }
-        guard let epoch = localControllerEpoch else { queueIntent(.scroll(dx, dy)); return }
+        guard let epoch = localControllerEpoch else { queueIntent(.scroll(dx, dy, x, y)); return }
         beginActiveInput(epoch: epoch)
-        sendControl(.init(epoch: epoch, sequence: nextSequence(), kind: .scroll, deltaX: dx, deltaY: dy))
+        sendControl(.init(epoch: epoch, sequence: nextSequence(), kind: .scroll, x: x, y: y, deltaX: dx, deltaY: dy))
     }
 
     // MARK: RoomDelegate
@@ -689,6 +742,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             self.requestTimeoutTask = nil
             self.controlAvailabilityBySender.removeAll()
             self.remoteControlUnavailableReason = nil
+            self.resetIndependentCursors()
             self.room = nil
             self.controlState = .unavailable
             self.audioForwardingConsented = false
@@ -697,9 +751,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     nonisolated func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
+        let identity = participant.identity?.stringValue
         Task { @MainActor [weak self] in
             guard let self, self.room === room else { return }
             self.refreshParticipants()
+            if let identity { self.sendControlAvailability(to: identity) }
         }
     }
 
@@ -714,7 +770,10 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             }
             self.refreshParticipants()
             self.refreshSharer()
-            self.remotePointers.removeAll { $0.id == identity }
+            self.removeRemotePointer(identity)
+            self.cursorSequenceBySender.removeValue(forKey: identity)
+            self.independentCursorParticipants.remove(identity)
+            self.controlAvailabilityBySender.removeValue(forKey: identity)
             self.pendingControlRequests.removeAll { $0.identity == identity }
             if self.controlGateIdentity == identity { self.releaseDriver(sender: identity, notifyDriver: false) }
         }
@@ -730,7 +789,6 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                 self.activeSharerIdentity = identity
                 self.applyRemoteControlAvailability(from: identity, trackName: video.name)
                 self.refreshSharer()
-                self.requestControl()
             }
         }
         if let audio = publication.track as? RemoteAudioTrack {
@@ -828,7 +886,15 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         switch message.kind {
         case .request:
             guard isSharing, sender != localIdentity else { return }
-            guard !shareIsWindow, automaticControlEnabled else {
+            // The request is reliable and may arrive before the lossy cursor
+            // presence packet. Remember the negotiated mode before the first
+            // queued click is replayed after a grant.
+            if !shareIsWindow, message.cursorSession == cursorSessionID,
+               cursorSessionID != nil {
+                independentCursorParticipants.insert(sender)
+            }
+            guard !shareIsWindow, automaticControlEnabled,
+                  ProcessInfo.processInfo.systemUptime >= ownerBusyUntil else {
                 // End legacy viewers' pending requests and tell newer viewers why.
                 let kind: RemoteControlMessage.Kind = !shareIsWindow && !AXIsProcessTrusted() ? .hostPermissionRequired : .revoke
                 sendControl(.init(epoch: "", sequence: nextSequence(), kind: kind), to: sender)
@@ -854,8 +920,21 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         case .availability:
             guard !isSharing, sender != localIdentity, let available = message.available else { return }
             let reason = message.reason.flatMap(RemoteControlUnavailableReason.init(rawValue:))
-            controlAvailabilityBySender[sender] = (available, reason)
-            if sender == activeSharerIdentity { applyRemoteControlAvailability(available, reason: reason) }
+            let session = message.cursorSession.flatMap { $0.isEmpty ? nil : $0 }
+            controlAvailabilityBySender[sender] = (available, reason, session)
+            if sender == activeSharerIdentity {
+                cursorSessionID = session
+                applyRemoteControlAvailability(available, reason: reason)
+            }
+        case .cursor:
+            guard isSharing, !shareIsWindow,
+                  IndependentCursorPolicy.accepts(message, session: cursorSessionID,
+                    isParticipant: sender != localIdentity && room?.remoteParticipants.values.contains(where: { $0.identity?.stringValue == sender }) == true,
+                    lastSequence: cursorSequenceBySender[sender]) else { return }
+            cursorSequenceBySender[sender] = message.sequence
+            independentCursorParticipants.insert(sender)
+            if message.visible == false { removeRemotePointer(sender) }
+            else if let x = message.x, let y = message.y { recordRemotePointer(identity: sender, x: x, y: y) }
         case .grant:
             guard sender == activeSharerIdentity, !message.epoch.isEmpty,
                   case .requesting = controlState else { return }
@@ -882,6 +961,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             controlState = .viewer
         case .hostPermissionRequired:
             guard sender == activeSharerIdentity, case .requesting = controlState else { return }
+            requestTimeoutTask?.cancel()
             localControllerEpoch = nil
             heartbeatTask?.cancel()
             heartbeatTask = nil
@@ -905,7 +985,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             if message.kind == .pointer, let x = message.x, let y = message.y,
                x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) {
                 recordRemotePointer(identity: sender, x: x, y: y)
-                if !shareIsWindow, let bounds = shareBounds {
+                if !shareIsWindow, let bounds = shareBounds,
+                   IndependentCursorPolicy.movesSystemCursor(independent: independentCursorParticipants.contains(sender), heldButtonCount: heldButtons.count) {
                     let activeButton = [0, 1, 2].first(where: heldButtons.contains)
                         .flatMap { CGMouseButton(rawValue: UInt32($0)) }
                     if !RemoteInputInjector.movePointer(x: x, y: y, in: bounds, draggingButton: activeButton) {
@@ -924,14 +1005,20 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                       (0...1).contains(x), (0...1).contains(y), !shareIsWindow,
                       let bounds = shareBounds, let button = CGMouseButton(rawValue: UInt32(code)) {
                 guard let point = RemoteInputInjector.point(x: x, y: y, in: bounds) else { return }
+                if down, independentCursorParticipants.contains(sender), ownerPointerPosition == nil {
+                    pointerRestoreTask?.cancel()
+                    ownerPointerPosition = RemoteInputInjector.currentPointerPosition
+                }
                 if RemoteInputInjector.button(button, down: down, at: point) {
                     if down { heldButtons.insert(Int(code)) } else { heldButtons.remove(Int(code)) }
+                    if !down && heldButtons.isEmpty { scheduleOwnerPointerRestore() }
                 } else { reportRemoteInputFailure(); return }
             } else if message.kind == .scroll,
                       let dx = message.deltaX, let dy = message.deltaY,
                       dx.isFinite, dy.isFinite, abs(dx) <= 200, abs(dy) <= 200,
                       !shareIsWindow {
-                if !RemoteInputInjector.scroll(deltaX: dx, deltaY: dy) {
+                let point = message.x.flatMap { x in message.y.flatMap { y in shareBounds.flatMap { RemoteInputInjector.point(x: x, y: y, in: $0) } } }
+                if !RemoteInputInjector.scroll(deltaX: dx, deltaY: dy, at: point) {
                     reportRemoteInputFailure()
                     return
                 }
@@ -942,18 +1029,85 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     private func recordRemotePointer(identity: String, x: Double, y: Double) {
-        let timestamp = Date()
         remotePointers.removeAll { $0.id == identity }
-        remotePointers.append(RemotePointer(id: identity, x: x, y: y, updatedAt: timestamp))
-        let sourceRoom = room
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(3))
-            guard let self, !Task.isCancelled,
-                  self.room === sourceRoom,
-                  self.remotePointers.first(where: { $0.id == identity })?.updatedAt == timestamp
-            else { return }
-            self.remotePointers.removeAll { $0.id == identity }
+        remotePointers.append(RemotePointer(id: identity, x: x, y: y, updatedAt: Date()))
+        updateCursorOverlay()
+        guard cursorExpiryTask == nil else { return }
+        cursorExpiryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                guard let self else { return }
+                self.remotePointers.removeAll { Date().timeIntervalSince($0.updatedAt) > 3 }
+                self.updateCursorOverlay()
+                if self.remotePointers.isEmpty { self.cursorExpiryTask = nil; return }
+            }
         }
+    }
+
+    private func removeRemotePointer(_ identity: String) {
+        remotePointers.removeAll { $0.id == identity }
+        updateCursorOverlay()
+    }
+
+    private func updateCursorOverlay() {
+        guard isSharing else { return }
+        cursorOverlay.update(pointers: remotePointers, names: Dictionary(uniqueKeysWithValues: participants.map { ($0.identity, $0.name) }))
+    }
+
+    /// Cursor presence is lossy, coalesced and separate from the ordered action
+    /// queue. Moving a pointer can never acquire a control lease or flood clicks.
+    func sendCursor(x: Double? = nil, y: Double? = nil, visible: Bool = true) {
+        guard connected, usesIndependentCursors, let session = cursorSessionID,
+              let sharer = activeSharerIdentity, let room else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if visible && now - lastCursorSentAt < 1.0 / 30 { return }
+        lastCursorSentAt = now
+        pendingCursorMessage = .init(epoch: session, sequence: nextSequence(), kind: .cursor, x: x, y: y, visible: visible)
+        guard cursorSendTask == nil else { return }
+        let taskID = UUID()
+        cursorSendTaskID = taskID
+        cursorSendTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, self.room === room, self.cursorSessionID == session,
+                  self.cursorSendTaskID == taskID,
+                  let message = self.pendingCursorMessage {
+                self.pendingCursorMessage = nil
+                if let data = try? JSONEncoder().encode(message) {
+                    let options = DataPublishOptions(destinationIdentities: [Participant.Identity(from: sharer)], topic: Self.controlTopic, reliable: false)
+                    try? await room.localParticipant.publish(data: data, options: options)
+                }
+            }
+            if self.cursorSendTaskID == taskID {
+                self.cursorSendTaskID = nil
+                self.cursorSendTask = nil
+            }
+        }
+    }
+
+    private func scheduleOwnerPointerRestore() {
+        guard ownerPointerPosition != nil else { return }
+        pointerRestoreTask?.cancel()
+        pointerRestoreTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(25)) } catch { return }
+            guard let self, self.heldButtons.isEmpty, let point = self.ownerPointerPosition else { return }
+            RemoteInputInjector.restorePointer(to: point)
+            self.ownerPointerPosition = nil
+            self.pointerRestoreTask = nil
+        }
+    }
+
+    private func resetIndependentCursors() {
+        cursorOverlay.hide()
+        cursorSessionID = nil
+        cursorSendTask?.cancel(); cursorSendTask = nil; cursorSendTaskID = nil
+        pendingCursorMessage = nil
+        cursorExpiryTask?.cancel(); cursorExpiryTask = nil
+        remotePointers.removeAll()
+        cursorSequenceBySender.removeAll()
+        independentCursorParticipants.removeAll()
+        ownerActivityTask?.cancel(); ownerActivityTask = nil
+        ownerBusyUntil = 0
+        scheduleOwnerPointerRestore()
     }
 
     private func reportRemoteInputFailure() {
@@ -1102,7 +1256,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         case .pointer(let x, let y): sendPointer(x: x, y: y)
         case .key(let code, let down, let modifiers): sendKey(code: code, down: down, modifiers: modifiers)
         case .button(let button, let down, let x, let y): sendButton(button: button, down: down, x: x, y: y)
-        case .scroll(let dx, let dy): sendScroll(dx: dx, dy: dy)
+        case .scroll(let dx, let dy, let x, let y): sendScroll(dx: dx, dy: dy, x: x, y: y)
         }
     }
 
@@ -1115,6 +1269,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         }
         heldKeys.removeAll()
         heldButtons.removeAll()
+        scheduleOwnerPointerRestore()
     }
 
     // MARK: State and audio
@@ -1158,12 +1313,17 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         for participant in room.remoteParticipants.values {
             if let publication = participant.videoTracks.first(where: { $0.source == .screenShareVideo }),
                let sharer = participant.identity?.stringValue {
-                activeSharerIdentity = sharer
+                if activeSharerIdentity != sharer {
+                    emergencyStop()
+                    resetIndependentCursors()
+                    activeSharerIdentity = sharer
+                    controlState = .viewer
+                }
                 applyRemoteControlAvailability(from: sharer, trackName: publication.name)
-                controlState = .viewer
                 return
             }
         }
+        if activeSharerIdentity != nil { emergencyStop(); resetIndependentCursors() }
         activeSharerIdentity = nil
         remoteControlAvailable = false
         remoteControlUnavailableReason = nil
@@ -1221,12 +1381,19 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     #endif
 
     private func handleLocalInput(_ event: NSEvent) {
+        if pointerRestoreTask != nil, event.type != .keyDown {
+            pointerRestoreTask?.cancel(); pointerRestoreTask = nil
+            ownerPointerPosition = nil
+        }
         if event.type == .keyDown, event.keyCode == 53,
            event.modifierFlags.contains([.control, .option]) {
             emergencyStop()
             return
         }
-        localOwnerInputDetected()
+        if [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type) {
+            guard !heldButtons.isEmpty else { return }
+        }
+        localOwnerInputDetected(restorePointer: event.type == .keyDown)
     }
 
 }

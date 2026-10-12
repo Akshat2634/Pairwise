@@ -213,7 +213,7 @@ struct MenuBarPanel: View {
                 Label("\(rtc.participantName(for: controller)) is controlling your Mac", systemImage: "cursorarrow.motionlines")
                     .font(.caption).foregroundStyle(Theme.textMuted)
             } else if rtc.remoteControlAvailable && rtc.automaticControlEnabled {
-                Label("Teammates can control when they click or type", systemImage: "cursorarrow").font(.caption).foregroundStyle(Theme.textMuted)
+                Label("Separate cursors · click or type to control", systemImage: "cursorarrow").font(.caption).foregroundStyle(Theme.textMuted)
             }
             if rtc.remoteControlAvailable {
                 Button(rtc.automaticControlEnabled ? "Stop control" : "Allow control again") {

@@ -22,6 +22,8 @@ Pairwise uses Apple's native ScreenCaptureKit content-sharing picker. A person c
 
 Remote mouse and keyboard input is optional. macOS requires the person at the shared Mac to grant Pairwise Accessibility access before input can be injected. Voice uses the microphone only after the person enables it. The app never starts capture, microphone, or transcription just by launching.
 
+The 0.4.0 source adds [separate named cursors](docs/separate-cursors.md): viewers can point without moving the owner's mouse, while clicks, drags, scrolling, and typing use one control stream. Install the same new build on both Macs for this mode. The coloured viewer pointer travels with the video, and remote actions still share macOS's single focus. Two-Mac acceptance of this new mode remains pending.
+
 ## Build and run locally
 
 Prerequisites: macOS 14+, Xcode 16.3 or later with Swift 6.1+, Go, Docker with Compose, and CMake. The checked-in LiveKit client patch is under `vendor/livekit-client-swift`; its upstream base and changes are documented in [UPSTREAM_PATCHES.md](UPSTREAM_PATCHES.md).
