@@ -156,7 +156,7 @@ enum RemoteInputInjector {
                                   mouseButton: draggingButton ?? .left)
         else { return false }
         event.setIntegerValueField(.eventSourceUserData, value: eventMarker)
-        event.post(tap: .cghidEventTap)
+        event.post(tap: .cgSessionEventTap)
         return true
     }
 
@@ -164,7 +164,7 @@ enum RemoteInputInjector {
         guard AXIsProcessTrusted(), let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: down) else { return false }
         event.flags = modifiers
         event.setIntegerValueField(.eventSourceUserData, value: eventMarker)
-        event.post(tap: .cghidEventTap)
+        event.post(tap: .cgSessionEventTap)
         return true
     }
 
@@ -182,7 +182,7 @@ enum RemoteInputInjector {
         }
         guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: button) else { return false }
         event.setIntegerValueField(.eventSourceUserData, value: eventMarker)
-        event.post(tap: .cghidEventTap)
+        event.post(tap: .cgSessionEventTap)
         return true
     }
 
@@ -197,7 +197,7 @@ enum RemoteInputInjector {
                                   wheel3: 0)
         else { return false }
         event.setIntegerValueField(.eventSourceUserData, value: eventMarker)
-        event.post(tap: .cghidEventTap)
+        event.post(tap: .cgSessionEventTap)
         return true
     }
 }

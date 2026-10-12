@@ -61,6 +61,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var remoteAudioRenderers: [String: (identity: String, track: RemoteAudioTrack, renderer: PCMForwarder)] = [:]
     private var shareTrack: LocalVideoTrack?
     private var isStartingShare = false
+    private var accessibilityMonitorTask: Task<Void, Never>?
+    private var remoteControlManuallyPaused = false
     private var resumeControlAfterReconnect = false
     private var shareBounds: CGRect?
     private var shareIsWindow = false
@@ -320,6 +322,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             shareBounds = selectedWindow ? nil : selectedFrame
             shareIsWindow = selectedWindow
             remoteControlAvailable = !shareIsWindow && canControlDisplay
+            remoteControlManuallyPaused = false
             automaticControlEnabled = remoteControlAvailable
             if automaticControlEnabled { controlArbiter.enable() }
             screenTrack = track
@@ -330,6 +333,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                 ? "Sharing window · remote control unavailable"
                 : (automaticControlEnabled ? "Sharing display · teammates can control when they interact" : "Sharing display · remote control unavailable")
             sendControl(.init(epoch: UUID().uuidString, sequence: nextSequence(), kind: .releaseAll))
+            startAccessibilityMonitor()
             pendingTrack = nil
         } catch {
             if let pendingTrack { _ = try? await pendingTrack.capturer.stopCapture() }
@@ -340,6 +344,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
 
     func stopScreenShare() async {
         guard let room, let track = shareTrack else { return }
+        accessibilityMonitorTask?.cancel()
+        accessibilityMonitorTask = nil
         revokeControl()
         guard let publication = room.localParticipant.localVideoTracks.first(where: { $0.track === track }) else {
             _ = try? await track.capturer.stopCapture()
@@ -389,7 +395,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         guard isSharing, automaticControlEnabled, !shareIsWindow else { return }
         guard AXIsProcessTrusted() else {
             error = "Enable PairDesk in System Settings → Privacy & Security → Accessibility to continue remote control."
-            pauseRemoteControl()
+            pauseRemoteControl(userInitiated: false)
             return
         }
         guard room?.remoteParticipants.values.contains(where: { $0.identity?.stringValue == identity }) == true else {
@@ -406,8 +412,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     /// Pauses automatic control for the rest of this share until explicitly resumed.
-    func pauseRemoteControl() {
+    func pauseRemoteControl(userInitiated: Bool = true) {
         guard isSharing else { return }
+        if userInitiated { remoteControlManuallyPaused = true }
         let waiting = pendingControlRequests.map(\.identity)
         automaticControlEnabled = false
         controlArbiter.disable()
@@ -420,10 +427,45 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     func resumeRemoteControl() {
-        guard isSharing, remoteControlAvailable, !controlTransportFailed else { return }
+        guard isSharing, remoteControlAvailable, !controlTransportFailed, AXIsProcessTrusted() else { return }
+        remoteControlManuallyPaused = false
         automaticControlEnabled = true
         controlArbiter.enable()
         controlState = .host
+    }
+
+    /// Accessibility consent can change while the share is active in System Settings.
+    /// Re-check it on the sharing Mac so a newly granted permission takes effect
+    /// without forcing the user to stop and restart screen sharing.
+    private func startAccessibilityMonitor() {
+        accessibilityMonitorTask?.cancel()
+        accessibilityMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.isSharing, !self.shareIsWindow else { return }
+                self.refreshRemoteControlPermission()
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
+    }
+
+    private func refreshRemoteControlPermission() {
+        guard isSharing, !shareIsWindow, !controlTransportFailed else { return }
+        let trusted = AXIsProcessTrusted()
+        if trusted && !remoteControlAvailable {
+            remoteControlAvailable = true
+            if !remoteControlManuallyPaused {
+                automaticControlEnabled = true
+                controlArbiter.enable()
+            }
+            status = remoteControlManuallyPaused
+                ? "Sharing display · remote control is paused"
+                : "Sharing display · remote control is ready"
+            error = nil
+        } else if !trusted && remoteControlAvailable {
+            remoteControlAvailable = false
+            pauseRemoteControl(userInitiated: false)
+            status = "Sharing display · enable PairDesk in Accessibility to allow control"
+        }
     }
 
     /// Kept for existing callers; revoking means pausing automatic control.
@@ -785,14 +827,17 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                 if !shareIsWindow, let bounds = shareBounds {
                     let activeButton = [0, 1, 2].first(where: heldButtons.contains)
                         .flatMap { CGMouseButton(rawValue: UInt32($0)) }
-                    _ = RemoteInputInjector.movePointer(x: x, y: y, in: bounds, draggingButton: activeButton)
+                    if !RemoteInputInjector.movePointer(x: x, y: y, in: bounds, draggingButton: activeButton) {
+                        reportRemoteInputFailure()
+                        return
+                    }
                 }
             } else if message.kind == .key, let code = message.code, let down = message.down {
                 guard code < 128, (message.modifiers ?? 0) & ~Self.allowedModifierMask == 0 else { return }
                 let flags = CGEventFlags(rawValue: message.modifiers ?? 0)
                 if RemoteInputInjector.key(code: code, down: down, modifiers: flags) {
                     if down { heldKeys.insert(code) } else { heldKeys.remove(code) }
-                }
+                } else { reportRemoteInputFailure(); return }
             } else if message.kind == .button, let code = message.code, code <= 2, let down = message.down,
                       let x = message.x, let y = message.y, x.isFinite, y.isFinite,
                       (0...1).contains(x), (0...1).contains(y), !shareIsWindow,
@@ -800,11 +845,16 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                 guard let point = RemoteInputInjector.point(x: x, y: y, in: bounds) else { return }
                 if RemoteInputInjector.button(button, down: down, at: point) {
                     if down { heldButtons.insert(Int(code)) } else { heldButtons.remove(Int(code)) }
-                }
+                } else { reportRemoteInputFailure(); return }
             } else if message.kind == .scroll,
                       let dx = message.deltaX, let dy = message.deltaY,
                       dx.isFinite, dy.isFinite, abs(dx) <= 200, abs(dy) <= 200,
-                      !shareIsWindow { _ = RemoteInputInjector.scroll(deltaX: dx, deltaY: dy) }
+                      !shareIsWindow {
+                if !RemoteInputInjector.scroll(deltaX: dx, deltaY: dy) {
+                    reportRemoteInputFailure()
+                    return
+                }
+            }
             else if message.kind == .releaseAll { releaseInjectedInputs() }
             startLeaseWatch()
         }
@@ -823,6 +873,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             else { return }
             self.remotePointers.removeAll { $0.id == identity }
         }
+    }
+
+    private func reportRemoteInputFailure() {
+        error = AXIsProcessTrusted()
+            ? "PairDesk couldn't send remote input. Check that Accessibility is enabled for the PairDesk copy in Applications, then restart PairDesk."
+            : "Accessibility access is off for PairDesk. Enable it in System Settings to let teammates control this Mac."
+        pauseRemoteControl()
     }
 
     private func sendControl(_ message: RemoteControlMessage, to identity: String? = nil) {

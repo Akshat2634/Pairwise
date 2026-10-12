@@ -4,7 +4,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MACOS="$ROOT/macos"
 CONFIGURATION=${PAIRDESK_CONFIGURATION:-release}
-OUTPUT="$ROOT/dist/PairDesk.app"
+OUTPUT=${PAIRDESK_APP_OUTPUT:-"$ROOT/dist/PairDesk.app"}
 STAGING="$ROOT/dist/.PairDesk.app.staging.$$"
 SIGNING_IDENTITY=${DEVELOPER_SIGNING_IDENTITY:--}
 WHISPER_RUNTIME="$ROOT/.cache/whisper/runtime"
