@@ -13,7 +13,8 @@ final class AppStore: ObservableObject {
     @Published var callInvitations: [CallInvitation] = []
     @Published var joinRequests: [CallJoinRequest] = []
     @Published var activeTeamCalls: [PairRoom] = []
-    @Published var callMessage: String?
+    /// One-line call status clears itself instead of leaking into the next call.
+    @Published var callMessage: String? { didSet { scheduleCallMessageExpiry() } }
     @Published var activeRoom: PairRoom?
     @Published var callStartedAt: Date?
     @Published var busy = false
@@ -34,6 +35,7 @@ final class AppStore: ObservableObject {
     private var token: String?
     private var refreshTask: Task<Void, Never>?
     private var callRefreshTask: Task<Void, Never>?
+    private var callMessageExpiry: Task<Void, Never>?
     private var observedCallStatuses: [String: String] = [:]
     private var attentionRequest: Int?
     private var autoVoiceCallID: String?
@@ -389,6 +391,7 @@ final class AppStore: ObservableObject {
 
     private func joinInternal(_ room: PairRoom) async {
         error = nil
+        callMessage = nil
         generation += 1
         let attempt = generation
         await leave()
@@ -408,6 +411,16 @@ final class AppStore: ObservableObject {
             await rtc.disconnect()
             try? await api.send("v1/rooms/\(room.id)/leave", body: EmptyBody())
             self.error = error.localizedDescription
+        }
+    }
+
+    private func scheduleCallMessageExpiry() {
+        callMessageExpiry?.cancel()
+        guard callMessage != nil else { return }
+        callMessageExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            self?.callMessage = nil
         }
     }
 

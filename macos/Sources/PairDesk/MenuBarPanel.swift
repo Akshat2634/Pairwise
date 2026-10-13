@@ -37,6 +37,7 @@ struct MenuBarPanel: View {
         }
         .padding(16).frame(width: Theme.panelWidth)
         .background(Theme.surface)
+        .background(MenuBarAnchor())
         .tint(Theme.accent)
         .onAppear { if store.user != nil { Task { await store.refresh() } } }
         .task {
@@ -470,6 +471,62 @@ private final class FloatingPanelView: NSView {
             }
             window.orderFrontRegardless()
         }
+    }
+}
+
+/// SwiftUI's menu bar window keeps its bottom-left corner when the panel's
+/// height changes, so a shorter panel can drift downward. Anchor its top edge
+/// to the bottom of PairDesk's status item after every resize and on show.
+private struct MenuBarAnchor: NSViewRepresentable {
+    func makeNSView(context: Context) -> MenuBarAnchorView { MenuBarAnchorView() }
+    func updateNSView(_ nsView: MenuBarAnchorView, context: Context) {}
+}
+
+@MainActor
+private final class MenuBarAnchorView: NSView {
+    private static let defaultGap: CGFloat = 6
+    private var gapBelowStatusItem: CGFloat?
+    private var reattaching = false
+    private var observers: [NSObjectProtocol] = []
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers.removeAll()
+        guard let window else { return }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.recordPlacement() }
+        })
+        observers.append(center.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.reattach() }
+        })
+        observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in if self?.window?.occlusionState.contains(.visible) == true { self?.reattach() } }
+        })
+    }
+
+    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+
+    private func statusItemBottom(for window: NSWindow) -> CGFloat? {
+        let statusWindows = NSApp.windows.filter { String(describing: type(of: $0)).contains("StatusBar") }
+        if let onScreen = statusWindows.first(where: { $0.screen == window.screen }) ?? statusWindows.first { return onScreen.frame.minY }
+        return (window.screen ?? NSScreen.main)?.visibleFrame.maxY
+    }
+
+    private func recordPlacement() {
+        guard !reattaching, let window, let bottom = statusItemBottom(for: window) else { return }
+        let gap = bottom - window.frame.maxY
+        if (0...12).contains(gap) { gapBelowStatusItem = gap }
+    }
+
+    private func reattach() {
+        guard let window, let bottom = statusItemBottom(for: window) else { return }
+        let top = bottom - (gapBelowStatusItem ?? Self.defaultGap)
+        guard abs(window.frame.maxY - top) > 0.5 else { return }
+        reattaching = true
+        window.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: top))
+        reattaching = false
     }
 }
 
