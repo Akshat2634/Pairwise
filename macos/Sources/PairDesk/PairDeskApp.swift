@@ -2,11 +2,6 @@ import SwiftUI
 import AppKit
 import Combine
 
-extension Notification.Name {
-    /// Posted when the person clicks the Dock icon, which exists only during a call.
-    static let pairDeskReopen = Notification.Name("app.internal.pairdesk.reopen")
-}
-
 @MainActor
 final class AppRuntime {
     static let shared = AppRuntime()
@@ -28,66 +23,88 @@ struct PairDeskApp: App {
     @StateObject private var store = AppRuntime.shared.store
     @StateObject private var loginItem = AppRuntime.shared.loginItem
     var body: some Scene {
-        MenuBarExtra {
-            MenuBarPanel(store: store, rtc: store.rtc, loginItem: loginItem)
-        } label: { MenuBarStatusLabel(store: store, rtc: store.rtc) }
-        .menuBarExtraStyle(.window)
+        // The menu bar and every other window are AppKit (StatusBarController,
+        // AppWindows); only the sign-in window is a SwiftUI scene.
         Window("PairDesk", id: "main") {
             RootView(store: store).environmentObject(loginItem).preferredColorScheme(.dark)
                 .background(InitialWindowHider())
-        }.windowStyle(.hiddenTitleBar).windowResizability(.contentSize)
-        Window("PairDesk · Shared screen", id: "screen") {
-            SharedScreenWindow(store: store, rtc: store.rtc, transcripts: store.transcripts).frame(minWidth: 700, minHeight: 450).preferredColorScheme(.dark)
-        }.defaultSize(width: 1440, height: 900)
-        Window("Share your screen", id: "share") { ScreenSharePickerView(store: store).preferredColorScheme(.dark) }
-            .windowResizability(.contentSize)
-        Window("PairDesk permissions", id: "permissions") { PermissionsView().preferredColorScheme(.dark) }
-            .windowResizability(.contentSize)
-        Window("PairDesk account", id: "account") {
-            AccountView(store: store).environmentObject(loginItem).preferredColorScheme(.dark)
-        }.windowResizability(.contentSize)
-        Window("Incoming PairDesk call", id: "incoming") { IncomingCallView(store: store).preferredColorScheme(.dark) }
-            .windowResizability(.contentSize)
-            .commands {
-                CommandGroup(after: .appSettings) {
-                    Toggle("Start at login", isOn: Binding(get: { loginItem.enabled }, set: { loginItem.setEnabled($0) }))
-                }
-                CommandGroup(after: .newItem) {
-                    Button("Stop Remote Control") { store.rtc.revokeControl() }.keyboardShortcut(.escape, modifiers: [.control, .option])
-                }
+        }
+        .windowStyle(.hiddenTitleBar).windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .appSettings) {
+                Toggle("Start at login", isOn: Binding(get: { loginItem.enabled }, set: { loginItem.setEnabled($0) }))
             }
+            CommandGroup(after: .newItem) {
+                Button("Stop Remote Control") { store.rtc.revokeControl() }.keyboardShortcut(.escape, modifiers: [.control, .option])
+            }
+        }
     }
 }
 
 @MainActor
 final class PairDeskDelegate: NSObject, NSApplicationDelegate {
     var store: AppStore { AppRuntime.shared.store }
-    private var dockPresence: AnyCancellable?
+    private var statusBar: StatusBarController?
+    private var subscriptions = Set<AnyCancellable>()
+    private var shownIncomingCallID: String?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Accessory mode and LSUIElement keep calling in the menu bar. Like
         // Tuple, the Dock icon appears only while a call is active, so the
         // call is reachable with Cmd-Tab and the icon is a reminder it's on.
         NSApp.setActivationPolicy(.accessory)
-        dockPresence = store.$activeRoom.map { $0 != nil }.removeDuplicates().sink { inCall in
-            NSApp.setActivationPolicy(inCall ? .regular : .accessory)
-        }
         #if DEBUG
         if let directory = ProcessInfo.processInfo.environment["PAIRDESK_SNAPSHOT_DIR"] {
             UISnapshots.render(to: URL(fileURLWithPath: directory, isDirectory: true))
             exit(0)
         }
         #endif
-        AppRuntime.shared.start()
+        let store = self.store
+        let rtc = store.rtc
+        statusBar = StatusBarController(store: store, rtc: rtc, loginItem: AppRuntime.shared.loginItem)
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["PAIRDESK_PANEL_CHECK"] != nil, let statusBar {
+            PanelCheck.run(store: store, statusBar: statusBar)
+            return
+        }
+        #endif
 
+        // @Published emits before the value lands; each handler hops once so
+        // it reads the new state.
+        store.$activeRoom.map { $0 != nil }.removeDuplicates().sink { inCall in
+            NSApp.setActivationPolicy(inCall ? .regular : .accessory)
+        }.store(in: &subscriptions)
+        store.$callInvitations.sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.syncIncomingCallWindow() }
+        }.store(in: &subscriptions)
+        rtc.$activeSharerIdentity.sink { _ in
+            Task { @MainActor in
+                if rtc.activeSharerIdentity != nil, !rtc.isSharing, rtc.screenTrack != nil { AppWindows.shared.showSharedScreen(store: store) }
+            }
+        }.store(in: &subscriptions)
+        store.$activeRoom.map { $0?.id }.removeDuplicates().sink { id in
+            guard id == nil else { return }
+            Task { @MainActor in AppWindows.shared.close("screen"); AppWindows.shared.close("share") }
+        }.store(in: &subscriptions)
+        AppRuntime.shared.start()
     }
+
+    private func syncIncomingCallWindow() {
+        let id = store.incomingCall?.id
+        guard id != shownIncomingCallID else { return }
+        shownIncomingCallID = id
+        if id != nil { AppWindows.shared.showIncomingCall(store: store) } else { AppWindows.shared.close("incoming") }
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard store.activeRoom != nil else { return .terminateNow }
         Task { await store.leave(); sender.reply(toApplicationShouldTerminate: true) }
         return .terminateLater
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    /// A Dock click (the icon exists only during a call) opens the panel, as in Tuple.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        NotificationCenter.default.post(name: .pairDeskReopen, object: nil)
+        statusBar?.showPopover()
         return false
     }
 }
@@ -100,7 +117,9 @@ private struct InitialWindowHider: NSViewRepresentable {
 private final class InitialWindowView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard let window, AppRuntime.shared.suppressInitialWindow else { return }
+        guard let window else { return }
+        AppWindows.shared.register("main", window)
+        guard AppRuntime.shared.suppressInitialWindow else { return }
         AppRuntime.shared.suppressInitialWindow = false
         DispatchQueue.main.async { window.orderOut(nil) }
     }

@@ -6,7 +6,6 @@ struct MenuBarPanel: View {
     @ObservedObject var rtc: RTCService
     @ObservedObject var loginItem: LoginItemManager
     @ObservedObject private var permissions = PermissionManager.shared
-    @Environment(\.openWindow) private var openWindow
     @State private var searchText = ""
 
     var body: some View {
@@ -37,7 +36,6 @@ struct MenuBarPanel: View {
         }
         .padding(16).frame(width: Theme.panelWidth)
         .background(Theme.surface)
-        .background(MenuBarAnchor())
         .tint(Theme.accent)
         .onAppear { if store.user != nil { Task { await store.refresh() } } }
         .task {
@@ -65,14 +63,9 @@ struct MenuBarPanel: View {
                 Toggle("Play call sounds", isOn: $store.playCallSounds)
                 Menu("Screen-share quality · \(rtc.screenShareQuality.title)") {
                     ForEach(ScreenShareQuality.allCases) { quality in
-                        Button {
-                            rtc.setScreenShareQuality(quality)
-                        } label: {
-                            if rtc.screenShareQuality == quality {
-                                Label(quality.title, systemImage: "checkmark")
-                            } else {
-                                Text(quality.title)
-                            }
+                        Button { rtc.setScreenShareQuality(quality) } label: {
+                            if rtc.screenShareQuality == quality { Label(quality.title, systemImage: "checkmark") }
+                            else { Text(quality.title) }
                         }
                     }
                     Text("Applies to your next screen share")
@@ -415,15 +408,23 @@ struct MenuBarPanel: View {
         (store.activeRoom == nil || store.canAddPerson)
     }
     private func show(_ id: String) {
-        if id == "permissions" {
-            DispatchQueue.main.async { PermissionWindowController.shared.show() }
-        } else { openWindow(id: id); NSApp.activate(ignoringOtherApps: true) }
+        // Let the popover close before the window takes focus.
+        DispatchQueue.main.async {
+            StatusBarController.shared?.closePopover()
+            switch id {
+            case "permissions": PermissionWindowController.shared.show()
+            case "main": AppWindows.shared.showSignIn()
+            case "account": AppWindows.shared.showAccount(store: store, loginItem: loginItem)
+            case "share": AppWindows.shared.showSharePicker(store: store)
+            case "screen": AppWindows.shared.showSharedScreen(store: store)
+            default: break
+            }
+        }
     }
 }
 
 struct IncomingCallView: View {
     @ObservedObject var store: AppStore
-    @Environment(\.dismissWindow) private var dismissWindow
     var body: some View {
         let caller = store.incomingCall?.caller
         VStack(spacing: 18) {
@@ -444,114 +445,5 @@ struct IncomingCallView: View {
         }
         .padding(24).frame(width: 300)
         .background(Theme.surface)
-        .background(FloatingPanelPlacement())
-        .onChange(of: store.incomingCall?.id) { _, id in if id == nil { dismissWindow(id: "incoming") } }
-    }
-}
-
-/// Shows the incoming-call window like a notification: top right, above other
-/// apps' windows and on every Space. An accessory app's new window otherwise
-/// opens behind the frontmost app, where a ringing call is easy to miss. It
-/// does not activate the app, so typing elsewhere cannot answer the call.
-private struct FloatingPanelPlacement: NSViewRepresentable {
-    func makeNSView(context: Context) -> FloatingPanelView { FloatingPanelView() }
-    func updateNSView(_ nsView: FloatingPanelView, context: Context) {}
-}
-@MainActor
-private final class FloatingPanelView: NSView {
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard let window else { return }
-        window.level = .floating
-        window.collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary])
-        // Wait one turn so SwiftUI has sized the window before it is placed.
-        DispatchQueue.main.async {
-            if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
-                window.setFrameTopLeftPoint(NSPoint(x: visible.maxX - window.frame.width - 16, y: visible.maxY - 16))
-            }
-            window.orderFrontRegardless()
-        }
-    }
-}
-
-/// SwiftUI's menu bar window keeps its bottom-left corner when the panel's
-/// height changes, so a shorter panel can drift downward. Anchor its top edge
-/// to the bottom of PairDesk's status item after every resize and on show.
-private struct MenuBarAnchor: NSViewRepresentable {
-    func makeNSView(context: Context) -> MenuBarAnchorView { MenuBarAnchorView() }
-    func updateNSView(_ nsView: MenuBarAnchorView, context: Context) {}
-}
-
-@MainActor
-private final class MenuBarAnchorView: NSView {
-    private static let defaultGap: CGFloat = 6
-    private var gapBelowStatusItem: CGFloat?
-    private var reattaching = false
-    private var observers: [NSObjectProtocol] = []
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        observers.forEach(NotificationCenter.default.removeObserver)
-        observers.removeAll()
-        guard let window else { return }
-        let center = NotificationCenter.default
-        observers.append(center.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.recordPlacement() }
-        })
-        observers.append(center.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.reattach() }
-        })
-        observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in if self?.window?.occlusionState.contains(.visible) == true { self?.reattach() } }
-        })
-    }
-
-    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
-
-    private func statusItemBottom(for window: NSWindow) -> CGFloat? {
-        let statusWindows = NSApp.windows.filter { String(describing: type(of: $0)).contains("StatusBar") }
-        if let onScreen = statusWindows.first(where: { $0.screen == window.screen }) ?? statusWindows.first { return onScreen.frame.minY }
-        return (window.screen ?? NSScreen.main)?.visibleFrame.maxY
-    }
-
-    private func recordPlacement() {
-        guard !reattaching, let window, let bottom = statusItemBottom(for: window) else { return }
-        let gap = bottom - window.frame.maxY
-        if (0...12).contains(gap) { gapBelowStatusItem = gap }
-    }
-
-    private func reattach() {
-        guard let window, let bottom = statusItemBottom(for: window) else { return }
-        let top = bottom - (gapBelowStatusItem ?? Self.defaultGap)
-        guard abs(window.frame.maxY - top) > 0.5 else { return }
-        reattaching = true
-        window.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: top))
-        reattaching = false
-    }
-}
-
-struct MenuBarStatusLabel: View {
-    @ObservedObject var store: AppStore
-    @ObservedObject var rtc: RTCService
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismissWindow) private var dismissWindow
-    var body: some View {
-        Image(systemName: store.incomingCall != nil ? "phone.arrow.down.left" : (store.activeRoom != nil ? "phone.fill" : "rectangle.on.rectangle"))
-            .onChange(of: store.incomingCall?.id) { _, id in
-                if id != nil { openWindow(id: "incoming") }
-                else { dismissWindow(id: "incoming") }
-            }
-            .onChange(of: rtc.activeSharerIdentity) { _, identity in
-                if identity != nil, !rtc.isSharing, rtc.screenTrack != nil { openWindow(id: "screen"); NSApp.activate(ignoringOtherApps: true) }
-            }
-            .onChange(of: store.activeRoom?.id) { _, id in
-                if id == nil { dismissWindow(id: "screen"); dismissWindow(id: "share") }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .pairDeskReopen)) { _ in
-                // Dock click during a call: show the shared screen if there is
-                // one, otherwise the app window with call status and settings.
-                openWindow(id: rtc.screenTrack != nil && !rtc.isSharing ? "screen" : "main")
-                NSApp.activate(ignoringOtherApps: true)
-            }
     }
 }
