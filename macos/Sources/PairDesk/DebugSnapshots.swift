@@ -2,6 +2,42 @@
 import AppKit
 import SwiftUI
 
+/// PAIRDESK_PANEL_CHECK=1 opens the status item popover from code, as a Dock
+/// click does, toggles a fixture roster between tall and short, and prints
+/// where the popover's top edge sits relative to the status item each time.
+/// Debug builds only; no server, no saved session.
+@MainActor
+enum PanelCheck {
+    static func run(store: AppStore, statusBar: StatusBarController) {
+        let me = TeamUser(id: "me", name: "Bharat Hasija", email: "bharat@example.com", online: true, busy: false, admin: true, enabled: true)
+        let team = (1...6).map { TeamUser(id: "t\($0)", name: "Test person \($0)", email: "t\($0)@example.com", online: $0 % 2 == 0, busy: false, enabled: true) }
+        store.serverAddress = "snapshot.invalid"
+        store.user = me
+        store.users = [me] + team
+        store.directoryStatus = "Team connected"
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            statusBar.showPopover()
+            try? await Task.sleep(for: .seconds(1))
+            guard let status = NSApp.windows.first(where: { String(describing: type(of: $0)).contains("StatusBar") }),
+                  let popover = NSApp.windows.first(where: { String(describing: type(of: $0)).contains("Popover") }) else {
+                print("popover not found; windows: \(NSApp.windows.map { String(describing: type(of: $0)) })")
+                exit(2)
+            }
+            print("popover opened from code: \(popover.isVisible); top edge \(Int(status.frame.minY - popover.frame.maxY)) pt below the status item; height=\(Int(popover.frame.height))")
+            var tall = true
+            for _ in 0..<4 {
+                tall.toggle()
+                store.users = tall ? [me] + team : [me, team[1]]
+                try? await Task.sleep(for: .seconds(1.2))
+                print("roster \(tall ? "tall " : "short") height=\(Int(popover.frame.height))  top edge \(Int(status.frame.minY - popover.frame.maxY)) pt below the status item  x=\(Int(popover.frame.midX - status.frame.midX)) pt off the icon's center")
+                fflush(stdout)
+            }
+            exit(0)
+        }
+    }
+}
+
 /// Renders key screens with fixture data to PNG files so UI changes can be
 /// reviewed without a server, a call, or clicking through the menu bar.
 /// Debug builds only:
