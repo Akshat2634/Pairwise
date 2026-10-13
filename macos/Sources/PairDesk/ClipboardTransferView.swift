@@ -13,7 +13,7 @@ struct ClipboardPeer: Identifiable, Equatable {
 struct ClipboardTransferView: View {
     let peers: [ClipboardPeer]
     let incoming: (senderName: String, message: ClipboardTransferMessage)?
-    let onSend: (String, String) -> Void
+    let onSend: (String, String) async throws -> Void
     let onPaste: () -> Void
     let onDismiss: () -> Void
     let clipboardSyncEnabled: Bool
@@ -22,6 +22,7 @@ struct ClipboardTransferView: View {
 
     @State private var selectedPeerIdentity = ""
     @State private var status: String?
+    @State private var sending = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -46,7 +47,8 @@ struct ClipboardTransferView: View {
                     } label: {
                         Label("Send clipboard", systemImage: "doc.on.clipboard")
                     }
-                    .disabled(selectedPeerIdentity.isEmpty)
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(selectedPeerIdentity.isEmpty || sending)
                 }
             } else {
                 Text("Join a call with someone to share clipboard text.")
@@ -62,9 +64,8 @@ struct ClipboardTransferView: View {
                         .lineLimit(3)
                         .textSelection(.enabled)
                     HStack {
-                        Button("Paste on this Mac", action: onPaste)
-                        Button("Dismiss", action: onDismiss)
-                            .buttonStyle(.plain)
+                        Button("Paste on this Mac", action: onPaste).buttonStyle(PrimaryButtonStyle())
+                        Button("Dismiss", action: onDismiss).buttonStyle(QuietButtonStyle(compact: true))
                     }
                 }
                 .padding(8)
@@ -95,8 +96,16 @@ struct ClipboardTransferView: View {
             return
         }
         guard !selectedPeerIdentity.isEmpty else { return }
-        onSend(text, selectedPeerIdentity)
-        status = "Sent clipboard text."
+        let peer = selectedPeerIdentity
+        sending = true
+        status = "Sending…"
+        Task {
+            // The status reports the outcome, not the attempt: a clip that
+            // exceeds the transport's packet limits fails here, visibly.
+            do { try await onSend(text, peer); status = "Sent clipboard text." }
+            catch { status = error.localizedDescription }
+            sending = false
+        }
     }
 
 }

@@ -136,6 +136,14 @@ enum UISnapshots {
                                 microphoneEnabled: false)
         }
         snapshot("menu-in-call-muted", to: directory, compact: true) { MenuBarPanel(store: muted, rtc: muted.rtc, loginItem: loginItem) }
+        let syncing = store {
+            $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
+            $0.activeRoom = room; $0.callStartedAt = Date().addingTimeInterval(-410)
+            $0.rtc.debugSetCall(participants: [CallParticipant(identity: me.id, name: me.name, isLocal: true),
+                                               CallParticipant(identity: harshit.id, name: harshit.name, isLocal: false)],
+                                microphoneEnabled: true, clipboardSync: true)
+        }
+        snapshot("menu-in-call-clipboard-sync", to: directory, compact: true) { MenuBarPanel(store: syncing, rtc: syncing.rtc, loginItem: loginItem) }
         snapshot("window-incoming-call", to: directory) { IncomingCallView(store: incoming) }
         snapshot("window-sign-in", to: directory) { RootView(store: signedOut).environmentObject(loginItem) }
         snapshot("window-signed-in", to: directory) { RootView(store: idle).environmentObject(loginItem) }

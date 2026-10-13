@@ -114,10 +114,12 @@ struct SharedScreenWindow: View {
                 .help(rtc.isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone")
                 .accessibilityLabel(rtc.isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone")
                 Button { showClipboard = true } label: {
-                    Label("Clipboard", systemImage: "doc.on.clipboard")
+                    Label(rtc.clipboardSyncEnabled ? "Clipboard sync on" : "Clipboard",
+                          systemImage: rtc.clipboardSyncEnabled ? "doc.on.clipboard.fill" : "doc.on.clipboard")
                 }
                 .buttonStyle(.bordered)
-                .help("Send text to a teammate or paste received text on this Mac")
+                .tint(rtc.clipboardSyncEnabled ? Theme.accent : nil)
+                .help(rtc.clipboardSyncEnabled ? "Copied text is shared with this call until you turn sync off" : "Send text to a teammate or paste received text on this Mac")
                 Menu {
                     if store.availablePeople.isEmpty {
                         Text("No one else is available right now")
@@ -198,9 +200,7 @@ struct SharedScreenWindow: View {
             ClipboardTransferView(
                 peers: rtc.participants.filter { !$0.isLocal }.map { ClipboardPeer(identity: $0.identity, name: $0.name) },
                 incoming: rtc.incomingClipboardTransfer,
-                onSend: { text, identity in
-                    Task { do { try await rtc.sendClipboard(text: text, to: identity) } catch { store.error = error.localizedDescription } }
-                },
+                onSend: { text, identity in try await rtc.sendClipboard(text: text, to: identity) },
                 onPaste: { rtc.pasteIncomingClipboardTransfer() },
                 onDismiss: { rtc.dismissIncomingClipboardTransfer() },
                 clipboardSyncEnabled: rtc.clipboardSyncEnabled,
