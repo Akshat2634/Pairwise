@@ -41,6 +41,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var automaticControlEnabled = false
     @Published private(set) var remotePointers: [RemotePointer] = []
     @Published private(set) var cursorSessionID: String?
+    @Published private(set) var localCursorPosition: CGPoint?
     var usesIndependentCursors: Bool { !isSharing && cursorSessionID != nil }
     var canPointAtRemoteScreen: Bool { connected && !isSharing && screenTrack != nil && activeSharerIdentity != nil }
     @Published private(set) var localIdentity: String?
@@ -94,7 +95,6 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var cursorExpiryTask: Task<Void, Never>?
     private var cursorSequenceBySender: [String: UInt64] = [:]
     private var independentCursorParticipants = Set<String>()
-    private let cursorOverlay = SharedCursorOverlay()
     private var ownerPointerPosition: CGPoint?
     private var pointerRestoreTask: Task<Void, Never>?
     private var ownerBusyUntil: TimeInterval = 0
@@ -354,7 +354,6 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             shareTrack = track
             shareBounds = selectedWindow ? nil : selectedFrame
             cursorSessionID = selectedFrame == nil ? nil : UUID().uuidString
-            if let selectedFrame { cursorOverlay.show(in: selectedFrame) }
             shareIsWindow = selectedWindow
             remoteControlAvailable = !shareIsWindow && canControlDisplay
             remoteControlManuallyPaused = false
@@ -935,6 +934,18 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             independentCursorParticipants.insert(sender)
             if message.visible == false { removeRemotePointer(sender) }
             else if let x = message.x, let y = message.y { recordRemotePointer(identity: sender, x: x, y: y) }
+            relayCursor(message, identity: sender)
+        case .cursorBroadcast:
+            guard !isSharing,
+                  let pointerIdentity = message.pointerIdentity,
+                  IndependentCursorPolicy.acceptsBroadcast(message, session: cursorSessionID,
+                    senderIsSharer: sender == activeSharerIdentity,
+                    pointerIsParticipant: room?.remoteParticipants.values.contains(where: { $0.identity?.stringValue == pointerIdentity }) == true,
+                    viewerIdentity: localIdentity,
+                    lastSequence: cursorSequenceBySender[pointerIdentity]) else { return }
+            cursorSequenceBySender[pointerIdentity] = message.sequence
+            if message.visible == false { removeRemotePointer(pointerIdentity) }
+            else if let x = message.x, let y = message.y { recordRemotePointer(identity: pointerIdentity, x: x, y: y) }
         case .grant:
             guard sender == activeSharerIdentity, !message.epoch.isEmpty,
                   case .requesting = controlState else { return }
@@ -1031,14 +1042,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private func recordRemotePointer(identity: String, x: Double, y: Double) {
         remotePointers.removeAll { $0.id == identity }
         remotePointers.append(RemotePointer(id: identity, x: x, y: y, updatedAt: Date()))
-        updateCursorOverlay()
         guard cursorExpiryTask == nil else { return }
         cursorExpiryTask = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
                 guard let self else { return }
                 self.remotePointers.removeAll { Date().timeIntervalSince($0.updatedAt) > 3 }
-                self.updateCursorOverlay()
                 if self.remotePointers.isEmpty { self.cursorExpiryTask = nil; return }
             }
         }
@@ -1046,12 +1055,6 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
 
     private func removeRemotePointer(_ identity: String) {
         remotePointers.removeAll { $0.id == identity }
-        updateCursorOverlay()
-    }
-
-    private func updateCursorOverlay() {
-        guard isSharing else { return }
-        cursorOverlay.update(pointers: remotePointers, names: Dictionary(uniqueKeysWithValues: participants.map { ($0.identity, $0.name) }))
     }
 
     /// Cursor presence is lossy, coalesced and separate from the ordered action
@@ -1059,6 +1062,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     func sendCursor(x: Double? = nil, y: Double? = nil, visible: Bool = true) {
         guard connected, usesIndependentCursors, let session = cursorSessionID,
               let sharer = activeSharerIdentity, let room else { return }
+        if visible, let x, let y, x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) {
+            localCursorPosition = CGPoint(x: x, y: y)
+        } else if !visible {
+            localCursorPosition = nil
+        }
         let now = ProcessInfo.processInfo.systemUptime
         if visible && now - lastCursorSentAt < 1.0 / 30 { return }
         lastCursorSentAt = now
@@ -1084,6 +1092,26 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         }
     }
 
+    private func relayCursor(_ cursor: RemoteControlMessage, identity: String) {
+        guard isSharing, !shareIsWindow, let room,
+              let session = cursorSessionID else { return }
+        let destinations = room.remoteParticipants.values.compactMap { participant -> Participant.Identity? in
+            guard participant.identity?.stringValue != identity else { return nil }
+            return participant.identity
+        }
+        guard !destinations.isEmpty else { return }
+        var relay = cursor
+        relay.kind = .cursorBroadcast
+        relay.sequence = nextSequence()
+        relay.pointerIdentity = identity
+        relay.epoch = session
+        guard let data = try? JSONEncoder().encode(relay) else { return }
+        Task {
+            let options = DataPublishOptions(destinationIdentities: destinations, topic: Self.controlTopic, reliable: false)
+            try? await room.localParticipant.publish(data: data, options: options)
+        }
+    }
+
     private func scheduleOwnerPointerRestore() {
         guard ownerPointerPosition != nil else { return }
         pointerRestoreTask?.cancel()
@@ -1097,8 +1125,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     private func resetIndependentCursors() {
-        cursorOverlay.hide()
         cursorSessionID = nil
+        localCursorPosition = nil
         cursorSendTask?.cancel(); cursorSendTask = nil; cursorSendTaskID = nil
         pendingCursorMessage = nil
         cursorExpiryTask?.cancel(); cursorExpiryTask = nil

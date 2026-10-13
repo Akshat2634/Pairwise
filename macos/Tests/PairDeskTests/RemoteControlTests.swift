@@ -132,13 +132,26 @@ final class RemoteControlTests: XCTestCase {
         XCTAssertTrue(IndependentCursorPolicy.accepts(cursor, session: "share", isParticipant: true, lastSequence: 1))
     }
 
-    func testCursorOverlayUsesSelectedDisplayGlobalCoordinates() {
-        let leftDisplay = CGRect(x: -1440, y: 120, width: 1440, height: 900)
-        XCTAssertEqual(IndependentCursorPolicy.appKitFrame(for: leftDisplay, primaryScreenTop: 1080),
-                       CGRect(x: -1440, y: 60, width: 1440, height: 900))
-        let lowerDisplay = CGRect(x: 0, y: 1080, width: 1920, height: 1080)
-        XCTAssertEqual(IndependentCursorPolicy.appKitFrame(for: lowerDisplay, primaryScreenTop: 1080),
-                       CGRect(x: 0, y: -1080, width: 1920, height: 1080))
+    func testCursorBroadcastRequiresSharerAndAuthenticOtherParticipant() {
+        let broadcast = RemoteControlMessage(epoch: "share-2", sequence: 8, kind: .cursorBroadcast,
+                                             x: 0.4, y: 0.7, pointerIdentity: "viewer-a", visible: true)
+        XCTAssertTrue(IndependentCursorPolicy.acceptsBroadcast(broadcast, session: "share-2", senderIsSharer: true,
+                                                               pointerIsParticipant: true, viewerIdentity: "viewer-b", lastSequence: 7))
+        XCTAssertFalse(IndependentCursorPolicy.acceptsBroadcast(broadcast, session: "share-2", senderIsSharer: false,
+                                                                pointerIsParticipant: true, viewerIdentity: "viewer-b", lastSequence: 7))
+        XCTAssertFalse(IndependentCursorPolicy.acceptsBroadcast(broadcast, session: "share-2", senderIsSharer: true,
+                                                                pointerIsParticipant: false, viewerIdentity: "viewer-b", lastSequence: 7))
+        XCTAssertFalse(IndependentCursorPolicy.acceptsBroadcast(broadcast, session: "share-2", senderIsSharer: true,
+                                                                pointerIsParticipant: true, viewerIdentity: "viewer-a", lastSequence: 7))
+        XCTAssertFalse(IndependentCursorPolicy.acceptsBroadcast(broadcast, session: "old-share", senderIsSharer: true,
+                                                                pointerIsParticipant: true, viewerIdentity: "viewer-b", lastSequence: 7))
+    }
+
+    func testCursorBroadcastCanExplicitlyHidePointer() {
+        let broadcast = RemoteControlMessage(epoch: "share", sequence: 3, kind: .cursorBroadcast,
+                                             pointerIdentity: "viewer-a", visible: false)
+        XCTAssertTrue(IndependentCursorPolicy.acceptsBroadcast(broadcast, session: "share", senderIsSharer: true,
+                                                               pointerIsParticipant: true, viewerIdentity: "viewer-b", lastSequence: 2))
     }
 
     func testOwnerActivityTemporarilyBlocksInputWithoutBecomingPermissionFailure() {
