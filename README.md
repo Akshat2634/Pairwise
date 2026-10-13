@@ -22,7 +22,7 @@ Pairwise uses Apple's native ScreenCaptureKit content-sharing picker. A person c
 
 Remote mouse and keyboard input is optional. macOS requires the person at the shared Mac to grant Pairwise Accessibility access before input can be injected. Voice uses the microphone only after the person enables it. The app never starts capture, microphone, or transcription just by launching.
 
-The 0.5.0 source adds opt-in [text clipboard sharing](docs/clipboard-sharing.md), direct-call roster and group-call join requests, screen-share quality presets, viewer-side resolution/frame-rate/packet-loss telemetry, and clearer in-call controls. Clipboard sync must be enabled on both Macs and is active only during a call. The source also includes separate named cursors from 0.4.0. Two-Mac testing is still required for clipboard sync, group-call joining, cursor responsiveness, and perceived screen quality; these are not verified by unit tests.
+The current source adds opt-in [text clipboard sharing](docs/clipboard-sharing.md), group-call join requests, separate named cursors, and adaptive screen quality up to 4K/30. Display sharing lets the sender keep the full display or select a region after the macOS picker. Receiver measurements (resolution, frame rate, packet loss, and RTT) feed back to the sharer; sustained congestion steps quality down, and stable recovery steps it back up. Cursor motion is coalesced and sent separately from reliable clicks and key transitions. Two-Mac testing is still required for crop alignment, real input, clipboard paste, join prompts, adaptive transitions, and perceived quality; automated tests do not prove those behaviors.
 
 ## Build and run locally
 

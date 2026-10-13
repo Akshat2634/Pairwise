@@ -61,14 +61,18 @@ struct MenuBarPanel: View {
                 Toggle("Start at login", isOn: Binding(get: { loginItem.enabled }, set: { loginItem.setEnabled($0) }))
                 Toggle("Start calls muted", isOn: $store.startCallsMuted)
                 Toggle("Play call sounds", isOn: $store.playCallSounds)
-                Menu("Screen-share quality · \(rtc.screenShareQuality.title)") {
+                Toggle("Adapt screen quality to network", isOn: Binding(
+                    get: { rtc.adaptiveQualityEnabled },
+                    set: { rtc.setAdaptiveQualityEnabled($0) }
+                ))
+                Menu("Maximum screen quality · \(rtc.screenShareQuality.title)") {
                     ForEach(ScreenShareQuality.allCases) { quality in
                         Button { rtc.setScreenShareQuality(quality) } label: {
                             if rtc.screenShareQuality == quality { Label(quality.title, systemImage: "checkmark") }
                             else { Text(quality.title) }
                         }
                     }
-                    Text("Applies to your next screen share")
+                    Text("Maximum resolution; adaptive quality may step down")
                 }
                 if loginItem.needsApproval { Button("Approve automatic startup…") { loginItem.openSettings() } }
                 Divider()
@@ -127,6 +131,10 @@ struct MenuBarPanel: View {
                     Label(rtc.isSharing ? "Reconnecting · control paused" : "Reconnecting…", systemImage: "arrow.triangle.2.circlepath")
                         .font(.caption).foregroundStyle(Theme.attention).lineLimit(1)
                 }
+            }
+            if rtc.isSharing, let quality = rtc.adaptiveShareStatus {
+                Text("Screen quality · \(quality)")
+                    .font(.caption).foregroundStyle(Theme.textMuted)
             }
             VStack(alignment: .leading, spacing: 8) {
                 sectionHeader("ON THIS CALL · \(rtc.participants.filter { !$0.isLocal }.count + 1)")

@@ -73,4 +73,31 @@ final class ScreenShareQualityTests: XCTestCase {
         XCTAssertNil(ScreenNetworkQuality.selectedRoundTripTimeSeconds(selectedPairID: "candidate-b", pairs: pairs))
         XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: nil), .measuring)
     }
+
+    func testAdaptiveQualityOnlyReducesBelowTheSelectedMaximumAndRecoversWithHysteresis() {
+        var controller = AdaptiveShareController(maximum: .sharp)
+        XCTAssertEqual(controller.current, .fourK)
+        XCTAssertNil(controller.observe(.init(availableOutgoingBitrate: nil, bandwidthLimited: false, cpuLimited: false)))
+
+        let constrained = AdaptiveShareSignal(availableOutgoingBitrate: 2_000_000, bandwidthLimited: true, cpuLimited: false)
+        XCTAssertNil(controller.observe(constrained))
+        XCTAssertNil(controller.observe(constrained))
+        XCTAssertEqual(controller.observe(constrained), .q1440)
+        XCTAssertEqual(controller.current.dimensions.width, 2_560)
+        XCTAssertEqual(controller.current.fps, 30)
+
+        let healthy = AdaptiveShareSignal(availableOutgoingBitrate: 12_000_000, bandwidthLimited: false, cpuLimited: false,
+                                         receiversHealthy: true)
+        for _ in 0..<7 { XCTAssertNil(controller.observe(healthy)) }
+        XCTAssertEqual(controller.observe(healthy), .fourK)
+        XCTAssertEqual(controller.current.dimensions.width, 3_840)
+        XCTAssertEqual(controller.current.fps, 30)
+    }
+
+    func testAdaptiveQualityHonorsLowerMaximumAndNeverExceedsFourK30() {
+        let balanced = AdaptiveShareController(maximum: .balanced)
+        XCTAssertEqual(balanced.current, .q1440)
+        XCTAssertFalse(AdaptiveShareTier.tiers(maximum: .fast).contains(.fourK))
+        XCTAssertTrue(AdaptiveShareTier.allCases.allSatisfy { $0.fps <= 30 && $0.dimensions.width <= 3_840 })
+    }
 }

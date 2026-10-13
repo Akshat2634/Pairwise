@@ -22,6 +22,13 @@ private enum LocalControlIntent {
     case scroll(Double, Double, Double?, Double?)
 }
 
+private struct ViewerQualityFeedback {
+    let sequence: UInt64
+    let packetLossPercent: Double?
+    let roundTripMilliseconds: Int?
+    let receivedAtUptime: TimeInterval
+}
+
 /// Owns one LiveKit room, local media and the consented remote-control lease.
 @MainActor
 final class RTCService: NSObject, ObservableObject, RoomDelegate {
@@ -55,6 +62,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var screenNetworkQuality: ScreenNetworkQuality = .measuring
     @Published private(set) var screenStreamMetrics = ScreenStreamMetrics()
     @Published private(set) var screenShareQuality = ScreenShareQuality.load()
+    @Published private(set) var adaptiveQualityEnabled = (UserDefaults.standard.object(forKey: "adaptiveShareQualityEnabled") as? Bool) ?? true
+    @Published private(set) var adaptiveShareStatus: String?
     @Published private(set) var isReconnecting = false
     @Published private(set) var incomingClipboardTransfer: (senderName: String, message: ClipboardTransferMessage)?
     @Published private(set) var clipboardSyncEnabled = false
@@ -71,6 +80,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var lastMicrophoneMeterUpdate: TimeInterval = 0
     private var remoteAudioRenderers: [String: (identity: String, track: RemoteAudioTrack, renderer: PCMForwarder)] = [:]
     private var shareTrack: LocalVideoTrack?
+    private var adaptiveShareController: AdaptiveShareController?
+    private var adaptiveQualityTask: Task<Void, Never>?
     private var isStartingShare = false
     private var accessibilityMonitorTask: Task<Void, Never>?
     private var remoteControlManuallyPaused = false
@@ -102,6 +113,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     /// reliable message instead of one message per trackpad event.
     private var pendingScroll: (epoch: String, dx: Double, dy: Double, x: Double?, y: Double?)?
     private var scrollFlushTask: Task<Void, Never>?
+    private var lastQualityFeedbackSentAt: TimeInterval = 0
+    private var qualityFeedbackSequence: UInt64 = 0
+    private var viewerQualityFeedback: [String: ViewerQualityFeedback] = [:]
     private var cursorExpiryTask: Task<Void, Never>?
     private var cursorSequenceBySender: [String: UInt64] = [:]
     private var independentCursorParticipants = Set<String>()
@@ -331,13 +345,147 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                                                   framesPerSecond: video?.framesPerSecond,
                                                   packetsReceived: video?.packetsReceived,
                                                   packetsLost: video?.packetsLost)
+        sendViewerQualityFeedback()
     }
 
-    /// Saves the host's sender-side quality choice for the next screen share.
-    /// A track that is already published keeps its current capture/encoding.
+    private func sendViewerQualityFeedback() {
+        guard !isSharing, connected, let room, let sharer = activeSharerIdentity,
+              let session = cursorSessionID else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastQualityFeedbackSentAt >= 3 else { return }
+        let rtt: Int?
+        switch screenNetworkQuality {
+        case .measuring: rtt = nil
+        case let .good(milliseconds), let .fair(milliseconds), let .highLatency(milliseconds): rtt = milliseconds
+        }
+        guard screenStreamMetrics.packetLossPercent != nil || rtt != nil else { return }
+        lastQualityFeedbackSentAt = now
+        qualityFeedbackSequence &+= 1
+        let feedback = RemoteControlMessage(epoch: session,
+                                            sequence: qualityFeedbackSequence,
+                                            kind: .qualityFeedback,
+                                            packetLossPercent: screenStreamMetrics.packetLossPercent,
+                                            roundTripMilliseconds: rtt)
+        guard let data = try? JSONEncoder().encode(feedback) else { return }
+        let options = DataPublishOptions(name: "PairDesk screen quality feedback",
+                                         destinationIdentities: [Participant.Identity(from: sharer)],
+                                         topic: Self.controlTopic,
+                                         reliable: false)
+        Task { try? await room.localParticipant.publish(data: data, options: options) }
+    }
+
+    /// Saves the host's quality ceiling and applies it to an active share.
     func setScreenShareQuality(_ quality: ScreenShareQuality) {
         screenShareQuality = quality
         quality.persist()
+        guard isSharing,
+              let capturer = shareTrack?.capturer as? MacOSScreenCapturer else { return }
+        let tier: AdaptiveShareTier
+        if adaptiveQualityEnabled {
+            let controller = AdaptiveShareController(maximum: quality)
+            adaptiveShareController = controller
+            tier = controller.current
+            adaptiveShareStatus = "Auto · \(tier.title)"
+        } else {
+            Task {
+                do {
+                    try await capturer.updateScreenShareSettings(dimensions: quality.dimensions,
+                                                                  fps: quality.framesPerSecond)
+                } catch {
+                    adaptiveShareStatus = nil
+                }
+            }
+            return
+        }
+        Task {
+            do {
+                try await capturer.updateScreenShareSettings(dimensions: tier.dimensions, fps: tier.fps)
+            } catch {
+                adaptiveShareStatus = adaptiveQualityEnabled ? "Auto · holding current quality" : nil
+            }
+        }
+    }
+
+    func setAdaptiveQualityEnabled(_ enabled: Bool) {
+        guard adaptiveQualityEnabled != enabled else { return }
+        adaptiveQualityEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "adaptiveShareQualityEnabled")
+        if enabled {
+            let controller = AdaptiveShareController(maximum: screenShareQuality)
+            adaptiveShareController = controller
+            if isSharing, let capturer = shareTrack?.capturer as? MacOSScreenCapturer {
+                let tier = controller.current
+                adaptiveShareStatus = "Auto · \(tier.title)"
+                Task {
+                    do {
+                        try await capturer.updateScreenShareSettings(dimensions: tier.dimensions, fps: tier.fps)
+                    } catch {
+                        adaptiveShareStatus = "Auto · holding current quality"
+                    }
+                }
+            }
+            startAdaptiveQualityMonitoring()
+        } else {
+            adaptiveQualityTask?.cancel()
+            adaptiveQualityTask = nil
+            adaptiveShareStatus = nil
+            if let track = shareTrack, let capturer = track.capturer as? MacOSScreenCapturer {
+                let quality = screenShareQuality
+                Task { try? await capturer.updateScreenShareSettings(dimensions: quality.dimensions,
+                                                                      fps: quality.framesPerSecond) }
+            }
+        }
+    }
+
+    private func startAdaptiveQualityMonitoring() {
+        adaptiveQualityTask?.cancel()
+        guard adaptiveQualityEnabled, isSharing else { return }
+        adaptiveQualityTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                guard let self, self.isSharing, self.adaptiveQualityEnabled else { return }
+                await self.evaluateAdaptiveQuality()
+            }
+        }
+    }
+
+    private func evaluateAdaptiveQuality() async {
+        guard adaptiveQualityEnabled,
+              let track = shareTrack,
+              let statistics = track.statistics,
+              var controller = adaptiveShareController else { return }
+        let selectedPairID = statistics.transportStats?.selectedCandidatePairId
+        let availableBitrate = statistics.iceCandidatePair
+            .first(where: { $0.id == selectedPairID })?.availableOutgoingBitrate
+        let outbound = statistics.outboundRtpStream.first
+        let now = ProcessInfo.processInfo.systemUptime
+        let recentFeedback = viewerQualityFeedback.values.filter { now - $0.receivedAtUptime <= 10 }
+        let receiverLimited = recentFeedback.contains { feedback in
+            (feedback.packetLossPercent ?? 0) >= 3 || (feedback.roundTripMilliseconds ?? 0) > 350
+        }
+        let receiversHealthy = !recentFeedback.isEmpty && recentFeedback.allSatisfy { feedback in
+            (feedback.packetLossPercent ?? 0) <= 1 && (feedback.roundTripMilliseconds ?? 0) <= 250
+        }
+        let signal = AdaptiveShareSignal(
+            availableOutgoingBitrate: availableBitrate,
+            bandwidthLimited: outbound?.qualityLimitationReason == .bandwidth,
+            cpuLimited: outbound?.qualityLimitationReason == .cpu,
+            receiverLimited: receiverLimited,
+            receiversHealthy: receiversHealthy
+        )
+        guard let next = controller.observe(signal) else {
+            adaptiveShareController = controller
+            return
+        }
+        adaptiveShareController = controller
+        guard let capturer = track.capturer as? MacOSScreenCapturer else { return }
+        do {
+            try await capturer.updateScreenShareSettings(dimensions: next.dimensions, fps: next.fps)
+            adaptiveShareStatus = "Auto · \(next.title)"
+        } catch {
+            adaptiveShareController = AdaptiveShareController(maximum: screenShareQuality)
+            adaptiveShareStatus = "Auto · holding current quality"
+        }
     }
 
     /// Audio leaves the SDK renderer only after an explicit local transcription opt-in.
@@ -345,7 +493,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         audioForwardingConsented = enabled
     }
 
-    func startScreenShare(contentFilter: SCContentFilter) async throws {
+    func startScreenShare(contentFilter: SCContentFilter, sourceRect: CGRect = .zero) async throws {
         guard !isSharing, !isStartingShare else { throw LiveKitError(.invalidState, message: "Screen sharing is already active or starting.") }
         isStartingShare = true
         defer { isStartingShare = false }
@@ -365,11 +513,20 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         var pendingTrack: LocalVideoTrack?
         do {
             let selectedWindow = contentFilter.style == .window
-            let selectedFrame: CGRect?
+            let displayBounds: CGRect?
             if #available(macOS 15.2, *), !selectedWindow, let display = contentFilter.includedDisplays.first {
-                selectedFrame = CGDisplayBounds(display.displayID)
+                displayBounds = CGDisplayBounds(display.displayID)
+            } else { displayBounds = nil }
+            let selectedFrame: CGRect?
+            if let displayBounds {
+                selectedFrame = sourceRect.isEmpty
+                    ? displayBounds
+                    : CGRect(x: displayBounds.minX + sourceRect.minX,
+                             y: displayBounds.minY + sourceRect.minY,
+                             width: sourceRect.width,
+                             height: sourceRect.height)
             } else if !selectedWindow, NSScreen.screens.count == 1 {
-                selectedFrame = contentFilter.contentRect
+                selectedFrame = sourceRect.isEmpty ? contentFilter.contentRect : sourceRect
             } else { selectedFrame = nil }
             let canControlDisplay = selectedFrame != nil && AXIsProcessTrusted()
             // Older viewers infer view-only from the ".window" suffix; newer
@@ -380,10 +537,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                                                            fps: quality.framesPerSecond,
                                                            showCursor: true,
                                                            appAudio: false,
-                                                           includeCurrentApplication: true)
+                                                           includeCurrentApplication: true,
+                                                           sourceRect: sourceRect)
             let track = await LocalVideoTrack.createMacOSScreenShareTrack(name: trackName,
                                                                           contentFilter: contentFilter,
-                                                                          options: captureOptions)
+                                                                          options: captureOptions,
+                                                                          reportStatistics: true)
             pendingTrack = track
             let publishOptions = VideoPublishOptions(name: trackName,
                                                      screenShareEncoding: VideoEncoding(maxBitrate: quality.maxBitrate,
@@ -398,6 +557,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             remoteControlManuallyPaused = false
             automaticControlEnabled = remoteControlAvailable
             if automaticControlEnabled { controlArbiter.enable() }
+            adaptiveShareController = AdaptiveShareController(maximum: quality)
+            adaptiveShareStatus = adaptiveQualityEnabled ? "Auto · \(adaptiveShareController?.current.title ?? quality.title)" : nil
             screenTrack = track
             isSharing = true
             activeSharerIdentity = localIdentity
@@ -408,6 +569,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             sendControl(.init(epoch: UUID().uuidString, sequence: nextSequence(), kind: .releaseAll))
             startAccessibilityMonitor()
             sendControlAvailability()
+            startAdaptiveQualityMonitoring()
             pendingTrack = nil
         } catch {
             if let pendingTrack { _ = try? await pendingTrack.capturer.stopCapture() }
@@ -418,6 +580,10 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
 
     func stopScreenShare() async {
         guard let room, let track = shareTrack else { return }
+        adaptiveQualityTask?.cancel()
+        adaptiveQualityTask = nil
+        adaptiveShareController = nil
+        adaptiveShareStatus = nil
         accessibilityMonitorTask?.cancel()
         accessibilityMonitorTask = nil
         revokeControl()
@@ -852,6 +1018,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             self.cursorSequenceBySender.removeValue(forKey: identity)
             self.independentCursorParticipants.remove(identity)
             self.controlAvailabilityBySender.removeValue(forKey: identity)
+            self.viewerQualityFeedback.removeValue(forKey: identity)
             self.pendingControlRequests.removeAll { $0.identity == identity }
             if self.controlGateIdentity == identity { self.releaseDriver(sender: identity, notifyDriver: false) }
         }
@@ -1050,6 +1217,21 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             return
         }
         switch message.kind {
+        case .qualityFeedback:
+            guard isSharing, sender != localIdentity,
+                  room?.remoteParticipants.values.contains(where: { $0.identity?.stringValue == sender }) == true,
+                  message.epoch == cursorSessionID,
+                  message.sequence > (viewerQualityFeedback[sender]?.sequence ?? 0),
+                  (message.packetLossPercent.map { $0.isFinite && (0...100).contains($0) } ?? false)
+                    || (message.roundTripMilliseconds.map { (0...60_000).contains($0) } ?? false)
+            else { return }
+            viewerQualityFeedback[sender] = ViewerQualityFeedback(
+                sequence: message.sequence,
+                packetLossPercent: message.packetLossPercent,
+                roundTripMilliseconds: message.roundTripMilliseconds,
+                receivedAtUptime: ProcessInfo.processInfo.systemUptime
+            )
+            return
         case .request:
             guard isSharing, sender != localIdentity else { return }
             // The request is reliable and may arrive before the lossy cursor
@@ -1304,6 +1486,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         pendingLossy[.cursor] = nil
         cursorExpiryTask?.cancel(); cursorExpiryTask = nil
         remotePointers.removeAll()
+        viewerQualityFeedback.removeAll()
         cursorSequenceBySender.removeAll()
         independentCursorParticipants.removeAll()
         ownerActivityTask?.cancel(); ownerActivityTask = nil
