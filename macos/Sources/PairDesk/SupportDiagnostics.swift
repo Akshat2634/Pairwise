@@ -9,7 +9,7 @@ enum SupportDiagnostics {
         let info = Bundle.main.infoDictionary ?? [:]
         let appVersion = info["CFBundleShortVersionString"] as? String ?? "unknown"
         let build = info["CFBundleVersion"] as? String ?? "unknown"
-        let endpoint = URLComponents(string: store.serverAddress)?.host ?? "unavailable"
+        let endpoint = safeAPIHost(URLComponents(string: store.serverAddress)?.host)
         let callState = rtc.isReconnecting ? "reconnecting" : (rtc.connected ? "connected" : "not connected")
         let route = screenRouteSummary(rtc.screenTrack?.statistics)
         let errorCategory = safeErrorCategory(store.error ?? rtc.error)
@@ -56,6 +56,17 @@ enum SupportDiagnostics {
         if value.contains("screen") || value.contains("share") { return "screen sharing" }
         if value.contains("call") || value.contains("room") { return "call" }
         return "other (details omitted)"
+    }
+
+    static func safeAPIHost(_ host: String?) -> String {
+        guard let host, !host.isEmpty else { return "unavailable" }
+        if host.contains(":") { return "IP address omitted" }
+        let octets = host.split(separator: ".")
+        if octets.count == 4,
+           octets.allSatisfy({ UInt8($0) != nil }) {
+            return "IP address omitted"
+        }
+        return host
     }
 
     private static func candidateDescription(_ candidate: IceCandidateStatistics) -> String {

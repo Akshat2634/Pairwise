@@ -21,6 +21,12 @@ final class AppTests: XCTestCase {
         XCTAssertEqual(SupportDiagnostics.safeErrorCategory("Bearer secret-token connection failed"), "network")
         XCTAssertEqual(SupportDiagnostics.safeErrorCategory("Unexpected opaque error with private details"), "other (details omitted)")
     }
+    func testSupportDiagnosticsOmitIPAddressesFromAPIHost() {
+        XCTAssertEqual(SupportDiagnostics.safeAPIHost("136.80.31.73"), "IP address omitted")
+        XCTAssertEqual(SupportDiagnostics.safeAPIHost("2001:db8::1"), "IP address omitted")
+        XCTAssertEqual(SupportDiagnostics.safeAPIHost("pair.example.test"), "pair.example.test")
+        XCTAssertEqual(SupportDiagnostics.safeAPIHost(nil), "unavailable")
+    }
     func testPrivateTokensRequireHTTPSOutsideLoopback() throws {
         XCTAssertThrowsError(try APIClient(server: "http://192.168.1.1:8080"))
         XCTAssertThrowsError(try APIClient(server: "https://user:secret@example.com"))
