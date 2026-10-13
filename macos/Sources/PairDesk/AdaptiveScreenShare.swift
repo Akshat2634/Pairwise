@@ -36,7 +36,7 @@ enum AdaptiveShareTier: Equatable, CaseIterable {
         switch self {
         case .fourK: "4K · 30 fps"
         case .q1440: "1440p · 30 fps"
-        case .q1080: "1080p · 24 fps"
+        case .q1080: "1080p · 30 fps"
         case .q720: "720p · 15 fps"
         }
     }
@@ -60,7 +60,9 @@ struct AdaptiveShareSignal: Equatable {
 
 /// Hysteretic quality controller: three consecutive constrained samples step
 /// down; eight healthy samples step back up. Unknown bandwidth never triggers
-/// a downgrade by itself.
+/// a downgrade by itself. Recovery is judged against the tier it would step up
+/// to, with more headroom than that tier's step-down threshold, so stepping
+/// up never lands in the band that steps straight back down.
 struct AdaptiveShareController {
     private(set) var tierIndex = 0
     private(set) var poorSamples = 0
@@ -72,6 +74,8 @@ struct AdaptiveShareController {
     }
 
     var current: AdaptiveShareTier { tiers[min(tierIndex, tiers.count - 1)] }
+    /// The tier a recovery would move to; the current one at the top.
+    var next: AdaptiveShareTier { tiers[max(tierIndex - 1, 0)] }
 
     mutating func observe(_ signal: AdaptiveShareSignal) -> AdaptiveShareTier? {
         let capacityIsConstrained = signal.availableOutgoingBitrate.map {
@@ -82,7 +86,7 @@ struct AdaptiveShareController {
             healthySamples = 0
         } else if !signal.bandwidthLimited, !signal.cpuLimited, !signal.receiverLimited,
                   signal.receiversHealthy,
-                  signal.availableOutgoingBitrate.map({ $0 >= current.bitrateBudget * 1.6 }) ?? true {
+                  signal.availableOutgoingBitrate.map({ $0 >= next.bitrateBudget * 1.3 }) ?? true {
             healthySamples += 1
             poorSamples = 0
         } else {

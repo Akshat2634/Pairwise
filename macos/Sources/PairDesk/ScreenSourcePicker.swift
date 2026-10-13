@@ -80,17 +80,19 @@ private struct ScreenCropSelectionView: View {
             .frame(minHeight: 330)
             HStack {
                 Spacer()
-                Button("Share entire display") { onShare(nil) }
-                Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
+                Button("Share entire display") { onShare(nil) }.buttonStyle(QuietButtonStyle())
+                Button("Cancel", action: onCancel).buttonStyle(QuietButtonStyle()).keyboardShortcut(.cancelAction)
                 Button("Share selected region") {
                     if let normalizedSelection { onShare(normalizedSelection) }
                 }
+                .buttonStyle(PrimaryButtonStyle())
                 .keyboardShortcut(.defaultAction)
                 .disabled(normalizedSelection == nil)
             }
         }
         .padding(18)
         .frame(width: 820, height: 600)
+        .background(Theme.surface)
         .preferredColorScheme(.dark)
     }
 
@@ -110,7 +112,7 @@ private struct ScreenCropSelectionView: View {
 /// Uses Apple's native picker and limits capture access to one user-selected display or window.
 @available(macOS 14.0, *)
 @MainActor
-final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPickerObserver {
+final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPickerObserver, NSWindowDelegate {
     static let shared = SystemScreenPicker()
     private var continuation: CheckedContinuation<SCContentFilter, Error>?
     private var cropContinuation: CheckedContinuation<CGRect?, Error>?
@@ -169,17 +171,20 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
             window.isReleasedWhenClosed = false
             window.standardWindowButton(.zoomButton)?.isHidden = true
             window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+            // Resume before closing: closing also reaches windowWillClose, which
+            // must only act when the person dismissed the window with its close button.
             window.contentViewController = NSHostingController(rootView: ScreenCropSelectionView(
                 image: image,
                 onCancel: { [weak self, weak window] in
-                    window?.close()
                     self?.finishCrop(.failure(CocoaError(.userCancelled)))
+                    window?.close()
                 },
                 onShare: { [weak self, weak window] crop in
-                    window?.close()
                     self?.finishCrop(.success(crop))
+                    window?.close()
                 }
             ))
+            window.delegate = self
             cropWindow = window
             NSApp.activate(ignoringOtherApps: true)
             window.center()
@@ -192,6 +197,13 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
         cropContinuation = nil
         cropWindow = nil
         continuation?.resume(with: result)
+    }
+
+    /// The red close button is a cancel; without this the picker's caller
+    /// would wait forever and the app would stay busy.
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === cropWindow else { return }
+        finishCrop(.failure(CocoaError(.userCancelled)))
     }
 
     private func finish(_ result: Result<SCContentFilter, Error>, picker: SCContentSharingPicker) {
