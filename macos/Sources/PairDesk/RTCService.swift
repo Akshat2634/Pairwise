@@ -92,11 +92,16 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var heartbeatTask: Task<Void, Never>?
     private var heldKeys = Set<UInt16>()
     private var heldButtons = Set<Int>()
-    private var lastPointerSentAt: TimeInterval = 0
-    private var lastCursorSentAt: TimeInterval = 0
-    private var pendingCursorMessage: RemoteControlMessage?
-    private var cursorSendTask: Task<Void, Never>?
-    private var cursorSendTaskID: UUID?
+    private enum LossySlot { case pointer, cursor }
+    /// Pointer motion and cursor presence: the newest sample per slot, sent on
+    /// the lossy channel by one loop at up to 60 Hz. A stale sample is replaced,
+    /// never queued behind the reliable key/click/scroll messages.
+    private var pendingLossy: [LossySlot: (message: RemoteControlMessage, destination: String?)] = [:]
+    private var lossySendTask: Task<Void, Never>?
+    /// Scroll deltas arriving within 16 ms of a scroll send are summed into one
+    /// reliable message instead of one message per trackpad event.
+    private var pendingScroll: (epoch: String, dx: Double, dy: Double, x: Double?, y: Double?)?
+    private var scrollFlushTask: Task<Void, Never>?
     private var cursorExpiryTask: Task<Void, Never>?
     private var cursorSequenceBySender: [String: UInt64] = [:]
     private var independentCursorParticipants = Set<String>()
@@ -110,6 +115,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var notificationTokens: [NSObjectProtocol] = []
     private var controlSendTail: Task<Void, Never>?
     private var clipboardReplayWindow = ClipboardTransferReplayWindow()
+    private var clipboardAssembler = ClipboardTransferAssembler()
     private var clipboardSyncTask: Task<Void, Never>?
     private var clipboardObservedChangeCount = 0
     private var lastSharedClipboardText: String?
@@ -211,6 +217,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         remoteControlUnavailableReason = nil
         incomingClipboardTransfer = nil
         clipboardReplayWindow = ClipboardTransferReplayWindow()
+        clipboardAssembler = ClipboardTransferAssembler()
         setClipboardSyncEnabled(false)
         emergencyStop()
         resetIndependentCursors()
@@ -664,10 +671,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         }
         guard let epoch = localControllerEpoch else { queueIntent(.pointer(x, y)); return }
         beginActiveInput(epoch: epoch)
-        let now = ProcessInfo.processInfo.systemUptime
-        guard now - lastPointerSentAt >= 1.0 / 30 else { return }
-        lastPointerSentAt = now
-        sendControl(.init(epoch: epoch, sequence: nextSequence(), kind: .pointer, x: x, y: y))
+        // Motion is lossy and coalesced: a dropped or overtaken sample is
+        // replaced by the next one. Clicks carry their own position reliably.
+        enqueueLossy(.pointer, .init(epoch: epoch, sequence: nextSequence(), kind: .pointer, x: x, y: y))
     }
 
     func sendKey(code: UInt16, down: Bool, modifiers: UInt64 = 0) {
@@ -700,7 +706,45 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         else { return }
         guard let epoch = localControllerEpoch else { queueIntent(.scroll(dx, dy, x, y)); return }
         beginActiveInput(epoch: epoch)
-        sendControl(.init(epoch: epoch, sequence: nextSequence(), kind: .scroll, x: x, y: y, deltaX: dx, deltaY: dy))
+        if pendingScroll?.epoch != epoch { pendingScroll = nil }
+        if var pending = pendingScroll {
+            if abs(pending.dx + dx) <= 200, abs(pending.dy + dy) <= 200 {
+                pending.dx += dx
+                pending.dy += dy
+                pending.x = x ?? pending.x
+                pending.y = y ?? pending.y
+                pendingScroll = pending
+                return
+            }
+            flushPendingScroll()
+        }
+        if scrollFlushTask == nil {
+            sendControl(.init(epoch: epoch, sequence: nextSequence(), kind: .scroll, x: x, y: y, deltaX: dx, deltaY: dy))
+            scheduleScrollFlush()
+        } else {
+            pendingScroll = (epoch, dx, dy, x, y)
+        }
+    }
+
+    private func scheduleScrollFlush() {
+        scrollFlushTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled, let self else { return }
+            self.scrollFlushTask = nil
+            self.flushPendingScroll()
+        }
+    }
+
+    /// Sends the summed deltas and keeps the 16 ms window open while the
+    /// scroll continues, so a long trackpad scroll is at most 60 messages/s.
+    private func flushPendingScroll() {
+        guard let pending = pendingScroll else { return }
+        pendingScroll = nil
+        guard pending.epoch == localControllerEpoch else { return }
+        sendControl(.init(epoch: pending.epoch, sequence: nextSequence(), kind: .scroll,
+                          x: pending.x, y: pending.y, deltaX: pending.dx, deltaY: pending.dy))
+        scrollFlushTask?.cancel()
+        scheduleScrollFlush()
     }
 
     // MARK: RoomDelegate
@@ -889,7 +933,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             Task { @MainActor [weak self] in
                 guard let self, self.room === room, let localIdentity = self.localIdentity,
                       room.remoteParticipants.values.contains(where: { $0.identity?.stringValue == sender }),
-                      let message = try? ClipboardTransferMessage.decode(data, authenticatedSender: sender, localIdentity: localIdentity),
+                      let part = try? ClipboardTransferMessage.decode(data, authenticatedSender: sender, localIdentity: localIdentity),
+                      let message = self.clipboardAssembler.add(part, from: sender),
                       self.clipboardReplayWindow.insert(message.id) else { return }
                 if self.clipboardSyncEnabled {
                     NSPasteboard.general.clearContents()
@@ -924,10 +969,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
               room.remoteParticipants.values.contains(where: { $0.identity?.stringValue == identity }) else {
             throw LiveKitError(.invalidState, message: "That teammate is no longer in this call.")
         }
-        let message = try ClipboardTransferMessage(recipientIdentity: identity, text: text)
-        let data = try message.encoded()
+        // Every part is encoded before any is sent, so an oversized clip fails whole.
+        let packets = try ClipboardTransferMessage.parts(recipientIdentity: identity, text: text).map { try $0.encoded() }
         let options = DataPublishOptions(name: "PairDesk clipboard", destinationIdentities: [Participant.Identity(from: identity)], topic: Self.clipboardTopic, reliable: true)
-        try await room.localParticipant.publish(data: data, options: options)
+        for data in packets {
+            try await room.localParticipant.publish(data: data, options: options)
+        }
     }
 
     func pasteIncomingClipboardTransfer() {
@@ -963,14 +1010,21 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         let changeCount = pasteboard.changeCount
         guard changeCount != clipboardObservedChangeCount else { return }
         clipboardObservedChangeCount = changeCount
-        guard let text = pasteboard.string(forType: .string), !text.isEmpty,
-              text.utf8.count <= ClipboardTransferMessage.maximumTextBytes,
-              text != lastSharedClipboardText else { return }
+        let types = ((pasteboard.pasteboardItems ?? []).flatMap(\.types) + (pasteboard.types ?? [])).map(\.rawValue)
+        guard ClipboardSyncPolicy.mayShare(pasteboardTypes: types) else {
+            clipboardSyncNotice = "Private text from a password manager wasn't shared"
+            return
+        }
+        guard let text = pasteboard.string(forType: .string), !text.isEmpty, text != lastSharedClipboardText else { return }
+        guard text.utf8.count <= ClipboardTransferMessage.maximumTextBytes else {
+            clipboardSyncNotice = "Copied text is over the 64 KB limit and wasn't shared"
+            return
+        }
         lastSharedClipboardText = text
         for person in participants where !person.isLocal {
             Task { @MainActor [weak self] in
                 do { try await self?.sendClipboard(text: text, to: person.identity) }
-                catch { self?.error = error.localizedDescription }
+                catch { self?.clipboardSyncNotice = "Couldn't share copied text: \(error.localizedDescription)" }
             }
         }
         clipboardSyncNotice = "Copied text shared with teammates on this call"
@@ -1174,34 +1228,41 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     /// queue. Moving a pointer can never acquire a control lease or flood clicks.
     func sendCursor(x: Double? = nil, y: Double? = nil, visible: Bool = true) {
         guard connected, usesIndependentCursors, let session = cursorSessionID,
-              let sharer = activeSharerIdentity, let room else { return }
+              let sharer = activeSharerIdentity else { return }
         if visible, let x, let y, x.isFinite, y.isFinite, (0...1).contains(x), (0...1).contains(y) {
             localCursorPosition = CGPoint(x: x, y: y)
         } else if !visible {
             localCursorPosition = nil
         }
-        let now = ProcessInfo.processInfo.systemUptime
-        if visible && now - lastCursorSentAt < 1.0 / 30 { return }
-        lastCursorSentAt = now
-        pendingCursorMessage = .init(epoch: session, sequence: nextSequence(), kind: .cursor, x: x, y: y, visible: visible)
-        guard cursorSendTask == nil else { return }
-        let taskID = UUID()
-        cursorSendTaskID = taskID
-        cursorSendTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled, self.room === room, self.cursorSessionID == session,
-                  self.cursorSendTaskID == taskID,
-                  let message = self.pendingCursorMessage {
-                self.pendingCursorMessage = nil
-                if let data = try? JSONEncoder().encode(message) {
-                    let options = DataPublishOptions(destinationIdentities: [Participant.Identity(from: sharer)], topic: Self.controlTopic, reliable: false)
+        enqueueLossy(.cursor, .init(epoch: session, sequence: nextSequence(), kind: .cursor, x: x, y: y, visible: visible), to: sharer)
+    }
+
+    /// One loop publishes the newest sample of each slot on the lossy channel,
+    /// then waits 16 ms, and exits once nothing is pending. A sample whose
+    /// control epoch or cursor session has ended is dropped before publishing.
+    private func enqueueLossy(_ slot: LossySlot, _ message: RemoteControlMessage, to destination: String? = nil) {
+        pendingLossy[slot] = (message, destination)
+        guard lossySendTask == nil, let room else { return }
+        lossySendTask = Task { @MainActor [weak self] in
+            while true {
+                guard let self, self.room === room, !self.pendingLossy.isEmpty else { break }
+                let batch = self.pendingLossy
+                self.pendingLossy.removeAll()
+                for (slot, item) in batch {
+                    switch slot {
+                    case .pointer:
+                        guard item.message.epoch == self.localControllerEpoch, !self.controlTransportFailed else { continue }
+                    case .cursor:
+                        guard item.message.epoch == self.cursorSessionID else { continue }
+                    }
+                    guard let data = try? JSONEncoder().encode(item.message) else { continue }
+                    let destinations = item.destination.map { [Participant.Identity(from: $0)] } ?? []
+                    let options = DataPublishOptions(destinationIdentities: destinations, topic: Self.controlTopic, reliable: false)
                     try? await room.localParticipant.publish(data: data, options: options)
                 }
+                try? await Task.sleep(for: .milliseconds(16))
             }
-            if self.cursorSendTaskID == taskID {
-                self.cursorSendTaskID = nil
-                self.cursorSendTask = nil
-            }
+            self?.lossySendTask = nil
         }
     }
 
@@ -1240,8 +1301,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private func resetIndependentCursors() {
         cursorSessionID = nil
         localCursorPosition = nil
-        cursorSendTask?.cancel(); cursorSendTask = nil; cursorSendTaskID = nil
-        pendingCursorMessage = nil
+        pendingLossy[.cursor] = nil
         cursorExpiryTask?.cancel(); cursorExpiryTask = nil
         remotePointers.removeAll()
         cursorSequenceBySender.removeAll()
@@ -1513,11 +1573,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
 
     #if DEBUG
     /// UI snapshot fixtures only: stand in for a connected room.
-    func debugSetCall(participants: [CallParticipant], microphoneEnabled: Bool) {
+    func debugSetCall(participants: [CallParticipant], microphoneEnabled: Bool, clipboardSync: Bool = false) {
         connected = true
         self.participants = participants
         isMicrophoneEnabled = microphoneEnabled
         localMicrophoneLevel = microphoneEnabled ? 0.45 : 0
+        clipboardSyncEnabled = clipboardSync
+        clipboardSyncNotice = clipboardSync ? "Copied text shared with teammates on this call" : nil
     }
     #endif
 

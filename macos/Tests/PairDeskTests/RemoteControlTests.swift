@@ -14,6 +14,41 @@ final class RemoteControlTests: XCTestCase {
         XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 2), sender: "viewer-a", now: now))
     }
 
+    func testPointerMotionHasItsOwnSequenceAndStaleSamplesAreDropped() {
+        var gate = RemoteControlGate()
+        let now: TimeInterval = 1_000
+        gate.grant(identity: "viewer-a", epoch: "epoch-1", now: now)
+
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 5), sender: "viewer-a", now: now))
+        // A lossy sample overtakes the click sent before it.
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 7), sender: "viewer-a", now: now))
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 6, kind: .button), sender: "viewer-a", now: now),
+                      "a pointer sample must not block the reliable click behind it")
+        // Samples sent before the click arrive late: stale, dropped.
+        XCTAssertFalse(gate.accept(message(epoch: "epoch-1", seq: 4), sender: "viewer-a", now: now))
+        XCTAssertFalse(gate.accept(message(epoch: "epoch-1", seq: 6), sender: "viewer-a", now: now))
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 8), sender: "viewer-a", now: now))
+        // Reliable messages are compared only with reliable messages.
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 7, kind: .key), sender: "viewer-a", now: now))
+        XCTAssertFalse(gate.accept(message(epoch: "epoch-1", seq: 7, kind: .key), sender: "viewer-a", now: now))
+        XCTAssertEqual(gate.lastSequence, 7)
+        XCTAssertEqual(gate.lastPointerSequence, 8)
+
+        gate.revoke()
+        XCTAssertEqual(gate.lastPointerSequence, 0)
+    }
+
+    func testOlderViewersSendingPointerMotionInOrderStillPass() {
+        var gate = RemoteControlGate()
+        let now: TimeInterval = 1_000
+        gate.grant(identity: "viewer-a", epoch: "epoch-1", now: now)
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 1), sender: "viewer-a", now: now))
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 2, kind: .key), sender: "viewer-a", now: now))
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 3), sender: "viewer-a", now: now))
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 4, kind: .button), sender: "viewer-a", now: now))
+        XCTAssertTrue(gate.accept(message(epoch: "epoch-1", seq: 5, kind: .scroll), sender: "viewer-a", now: now))
+    }
+
     func testHeartbeatRenewsLeaseButCannotExtendBeyondTwoSeconds() {
         var gate = RemoteControlGate()
         let now: TimeInterval = 1_000

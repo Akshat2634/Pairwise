@@ -158,17 +158,24 @@ enum RemoteControlLeasePolicy {
 
 /// Checks the grant, epoch and monotonic sequence before an input event can be
 /// posted. A new grant creates a fresh epoch, making old queued messages inert.
+///
+/// The viewer numbers every message from one counter but sends pointer motion
+/// on the lossy channel, so pointer samples are checked against their own
+/// high-water mark: a sample that overtakes a key or click must not block it,
+/// and one that arrives after a later click is stale and is dropped.
 struct RemoteControlGate {
     private(set) var driverIdentity: String?
     private(set) var epoch: String?
     private(set) var expiresAtUptime: TimeInterval?
     private(set) var lastSequence: UInt64 = 0
+    private(set) var lastPointerSequence: UInt64 = 0
 
     mutating func grant(identity: String, epoch: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         driverIdentity = identity
         self.epoch = epoch
         expiresAtUptime = now + 2
         lastSequence = 0
+        lastPointerSequence = 0
     }
 
     mutating func revoke() {
@@ -176,6 +183,7 @@ struct RemoteControlGate {
         epoch = nil
         expiresAtUptime = nil
         lastSequence = 0
+        lastPointerSequence = 0
     }
 
     mutating func accept(_ message: RemoteControlMessage, sender: String,
@@ -184,9 +192,14 @@ struct RemoteControlGate {
               let driverIdentity,
               sender == driverIdentity,
               message.epoch == epoch,
-              let currentExpiry = expiresAtUptime, currentExpiry > now,
-              message.sequence > lastSequence
+              let currentExpiry = expiresAtUptime, currentExpiry > now
         else { return false }
+        if message.kind == .pointer {
+            guard message.sequence > max(lastPointerSequence, lastSequence) else { return false }
+            lastPointerSequence = message.sequence
+            return true
+        }
+        guard message.sequence > lastSequence else { return false }
         lastSequence = message.sequence
         if message.kind == .heartbeat {
             let duration = min(Double(message.leaseMilliseconds ?? 2_000), 2_000) / 1_000

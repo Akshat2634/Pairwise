@@ -194,6 +194,7 @@ struct MenuBarPanel: View {
                 Button("Microphone access needed to talk…") { show("permissions") }.buttonStyle(.plain).font(.caption).foregroundStyle(Theme.accent)
             }
             if rtc.isSharing { sharingStatus }
+            if rtc.clipboardSyncEnabled { clipboardSyncStatus }
             HStack {
                 if !store.canAddPerson {
                     Text("Call is full · four people").font(.caption).foregroundStyle(Theme.textMuted)
@@ -223,6 +224,17 @@ struct MenuBarPanel: View {
                     if rtc.selectedAudioOutputID == device.deviceId { Label(device.name, systemImage: "checkmark") } else { Text(device.name) }
                 }
             }
+        }
+    }
+
+    /// Sync shares every copy with the call, so it stays visible outside the
+    /// clipboard sheet, with the way to stop it.
+    private var clipboardSyncStatus: some View {
+        HStack(spacing: 8) {
+            Label(rtc.clipboardSyncNotice ?? "Clipboard sync is on", systemImage: "doc.on.clipboard")
+                .font(.caption).foregroundStyle(Theme.textMuted).lineLimit(1)
+            Spacer(minLength: 4)
+            Button("Turn off") { rtc.setClipboardSyncEnabled(false) }.buttonStyle(QuietButtonStyle(compact: true))
         }
     }
 
