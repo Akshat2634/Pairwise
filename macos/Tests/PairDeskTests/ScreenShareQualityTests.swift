@@ -2,6 +2,27 @@ import XCTest
 @testable import PairDesk
 
 final class ScreenShareQualityTests: XCTestCase {
+    func testReceivedStreamMetricsFormatMeasuredResolutionFrameRateAndLoss() {
+        let metrics = ScreenStreamMetrics(width: 2_560,
+                                          height: 1_440,
+                                          framesPerSecond: 29.6,
+                                          packetsReceived: 9_900,
+                                          packetsLost: 100)
+        XCTAssertEqual(metrics.width, 2_560)
+        XCTAssertEqual(metrics.height, 1_440)
+        XCTAssertEqual(metrics.framesPerSecond, 30)
+        XCTAssertEqual(try XCTUnwrap(metrics.packetLossPercent), 1.0, accuracy: 0.0001)
+        XCTAssertEqual(metrics.summary, "2560 × 1440 · 30 fps · 1.0% loss")
+    }
+
+    func testReceivedStreamMetricsOmitInvalidOrUnavailableValues() {
+        XCTAssertEqual(ScreenStreamMetrics().summary, "Stream stats unavailable")
+        XCTAssertEqual(ScreenStreamMetrics(width: 0, height: 1, framesPerSecond: .infinity).summary,
+                       "Stream stats unavailable")
+        XCTAssertNil(ScreenStreamMetrics(packetsReceived: 10, packetsLost: -1).packetLossPercent)
+        XCTAssertNil(ScreenStreamMetrics(packetsReceived: UInt64.max, packetsLost: 1).packetLossPercent)
+    }
+
     func testPresetsMapToRequestedResolutionFrameRateAndBitrate() {
         XCTAssertEqual(ScreenShareQuality.fast.width, 1_920)
         XCTAssertEqual(ScreenShareQuality.fast.height, 1_080)

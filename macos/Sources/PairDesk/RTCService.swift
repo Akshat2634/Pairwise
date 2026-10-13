@@ -53,6 +53,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var savedAudioOutputUnavailable = false
     @Published private(set) var localMicrophoneLevel = 0.0
     @Published private(set) var screenNetworkQuality: ScreenNetworkQuality = .measuring
+    @Published private(set) var screenStreamMetrics = ScreenStreamMetrics()
     @Published private(set) var screenShareQuality = ScreenShareQuality.load()
     @Published private(set) var isReconnecting = false
     @Published private(set) var incomingClipboardTransfer: (senderName: String, message: ClipboardTransferMessage)?
@@ -305,6 +306,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     func refreshScreenNetworkQuality() {
         guard let statistics = screenTrack?.statistics else {
             screenNetworkQuality = .measuring
+            screenStreamMetrics = ScreenStreamMetrics()
             return
         }
         let pairs = statistics.iceCandidatePair.map {
@@ -315,6 +317,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             pairs: pairs
         )
         screenNetworkQuality = .from(roundTripTimeSeconds: roundTripTime)
+        let video = statistics.inboundRtpStream.first(where: { $0.kind == "video" })
+            ?? statistics.inboundRtpStream.first
+        screenStreamMetrics = ScreenStreamMetrics(width: video?.frameWidth,
+                                                  height: video?.frameHeight,
+                                                  framesPerSecond: video?.framesPerSecond,
+                                                  packetsReceived: video?.packetsReceived,
+                                                  packetsLost: video?.packetsLost)
     }
 
     /// Saves the host's sender-side quality choice for the next screen share.
