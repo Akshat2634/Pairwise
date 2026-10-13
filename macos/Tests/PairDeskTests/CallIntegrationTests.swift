@@ -51,12 +51,13 @@ final class CallIntegrationTests: XCTestCase {
             // Independent hover uses an authenticated, lossy packet addressed
             // only to the sharing Mac, without any control lease.
             let cursorReceiver = DataReceiver(expectation: expectation(description: "Independent cursor delivered to host"), topic: "pairdesk.control.v1")
-            let bystanderExpectation = expectation(description: "Cursor is not broadcast to bystander")
-            bystanderExpectation.isInverted = true
+            let bystanderExpectation = expectation(description: "Host relays cursor to another viewer")
             let bystander = DataReceiver(expectation: bystanderExpectation, topic: "pairdesk.control.v1")
             media[0].add(delegate: cursorReceiver)
             media[2].add(delegate: bystander)
             let hostID = try XCTUnwrap(media[0].localParticipant.identity)
+            let viewerID = try XCTUnwrap(media[1].localParticipant.identity).stringValue
+            let bystanderID = try XCTUnwrap(media[2].localParticipant.identity)
             let cursor = RemoteControlMessage(epoch: "fixture-share", sequence: 1, kind: .cursor, x: 0.25, y: 0.75, visible: true)
             try await media[1].localParticipant.publish(data: JSONEncoder().encode(cursor), options: DataPublishOptions(destinationIdentities: [hostID], topic: "pairdesk.control.v1", reliable: false))
             await fulfillment(of: [cursorReceiver.expectation], timeout: 5)
@@ -64,7 +65,15 @@ final class CallIntegrationTests: XCTestCase {
             XCTAssertEqual(receivedCursor, cursor)
             XCTAssertEqual(cursorReceiver.sender, media[1].localParticipant.identity?.stringValue)
             XCTAssertTrue(IndependentCursorPolicy.accepts(receivedCursor, session: "fixture-share", isParticipant: true, lastSequence: nil))
-            await fulfillment(of: [bystanderExpectation], timeout: 0.5)
+            let relayed = RemoteControlMessage(epoch: "fixture-share", sequence: 2, kind: .cursorBroadcast,
+                                               x: 0.25, y: 0.75, pointerIdentity: viewerID, visible: true)
+            try await media[0].localParticipant.publish(data: JSONEncoder().encode(relayed), options: DataPublishOptions(destinationIdentities: [bystanderID], topic: "pairdesk.control.v1", reliable: false))
+            await fulfillment(of: [bystanderExpectation], timeout: 5)
+            let receivedRelay = try JSONDecoder().decode(RemoteControlMessage.self, from: XCTUnwrap(bystander.received))
+            XCTAssertEqual(receivedRelay, relayed)
+            XCTAssertEqual(bystander.sender, media[0].localParticipant.identity?.stringValue)
+            XCTAssertTrue(IndependentCursorPolicy.acceptsBroadcast(receivedRelay, session: "fixture-share", senderIsSharer: true,
+                                                                   pointerIsParticipant: true, viewerIdentity: bystanderID.stringValue, lastSequence: nil))
             media[0].remove(delegate: cursorReceiver)
             media[2].remove(delegate: bystander)
             do {
