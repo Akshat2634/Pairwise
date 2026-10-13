@@ -350,6 +350,11 @@ func pendingCallSeatsLocked(state State, roomID string, now time.Time) int {
 			count++
 		}
 	}
+	for _, request := range state.JoinRequests {
+		if request.RoomID == roomID && request.Status == "pending" && now.Before(request.ExpiresAt) {
+			count++
+		}
+	}
 	return count
 }
 func callParticipantActiveLocked(state State, invite CallInvitation, now time.Time) bool {
@@ -478,6 +483,11 @@ func (s *Server) canJoinDirectRoomLocked(roomID, userID string, now time.Time) b
 			return true
 		}
 	}
+	for _, request := range s.store.s.JoinRequests {
+		if request.RoomID == roomID && request.RequesterID == userID && request.Status == "accepted" && activeMemberInRoomLocked(s.store.s, userID, roomID, now) {
+			return true
+		}
+	}
 	return false
 }
 func cancelPendingCallsForCallerLocked(state *State, userID, roomID string, now time.Time) bool {
@@ -530,6 +540,13 @@ func (s *Server) leaveDirectRoomLocked(rm *Room, user User, now time.Time) error
 	if len(remaining) > 1 {
 		cancelPendingCallsForCallerLocked(&s.store.s, user.ID, rm.ID, now)
 		return nil
+	}
+	for id, request := range s.store.s.JoinRequests {
+		if request.RoomID == rm.ID && request.Status == "pending" {
+			request.Status = "cancelled"
+			request.UpdatedAt = now
+			s.store.s.JoinRequests[id] = request
+		}
 	}
 	for _, memberID := range remaining {
 		account := s.store.s.Users[memberID]

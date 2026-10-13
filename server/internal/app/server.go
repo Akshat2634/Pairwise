@@ -64,6 +64,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/rooms/", s.auth(s.roomAction))
 	mux.HandleFunc("/v1/calls", s.auth(s.calls))
 	mux.HandleFunc("/v1/calls/", s.auth(s.callAction))
+	mux.HandleFunc("/v1/active-calls", s.auth(s.activeCalls))
+	mux.HandleFunc("/v1/join-requests", s.auth(s.joinRequests))
+	mux.HandleFunc("/v1/join-requests/", s.auth(s.joinRequestAction))
 	return securityHeaders(mux)
 }
 
@@ -503,6 +506,10 @@ func (s *Server) rooms(w http.ResponseWriter, r *http.Request, u User) {
 func (s *Server) roomAction(w http.ResponseWriter, r *http.Request, u User) {
 	tail := strings.TrimPrefix(r.URL.Path, "/v1/rooms/")
 	parts := strings.Split(tail, "/")
+	if len(parts) == 2 && parts[0] != "" && parts[1] == "join-requests" {
+		s.createJoinRequest(w, r, u, parts[0])
+		return
+	}
 	if len(parts) != 2 || parts[0] == "" {
 		fail(w, 404, "not found")
 		return

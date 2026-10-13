@@ -45,6 +45,10 @@ enum UISnapshots {
             $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
             $0.callInvitations = [invitation(from: harshit, to: me)]
         }
+        let joinableRoom = PairRoom(id: "active-room", name: "Direct call", participantCount: 2, participants: [
+            TeamUser(id: "alex", name: "Alex Rivera", email: "alex@example.com", online: true, busy: true, enabled: true),
+            TeamUser(id: "saurab", name: "Saurab", email: "saurab@example.com", online: true, busy: true, enabled: true)
+        ])
 
         snapshot("menu-signed-out", to: directory, compact: true) { MenuBarPanel(store: signedOut, rtc: signedOut.rtc, loginItem: loginItem) }
         snapshot("menu-roster", to: directory, compact: true) { MenuBarPanel(store: idle, rtc: idle.rtc, loginItem: loginItem) }
@@ -68,6 +72,26 @@ enum UISnapshots {
                                 microphoneEnabled: true)
         }
         snapshot("menu-in-call", to: directory, compact: true) { MenuBarPanel(store: inCall, rtc: inCall.rtc, loginItem: loginItem) }
+        let joinRequestCall = store {
+            $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
+            $0.activeRoom = room; $0.callStartedAt = Date().addingTimeInterval(-62)
+            $0.joinRequests = [CallJoinRequest(id: "join-request", status: "pending", requester: team[3], room: PairRoom(id: "room", name: "Direct call", participantCount: 2, participants: [me, harshit]), expiresAt: "")]
+            $0.rtc.debugSetCall(participants: [CallParticipant(identity: me.id, name: me.name, isLocal: true),
+                                               CallParticipant(identity: harshit.id, name: harshit.name, isLocal: false)],
+                                microphoneEnabled: true)
+        }
+        snapshot("menu-in-call-join-request", to: directory, compact: true) { MenuBarPanel(store: joinRequestCall, rtc: joinRequestCall.rtc, loginItem: loginItem) }
+        let joinable = store {
+            $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
+            $0.activeTeamCalls = [joinableRoom]
+        }
+        snapshot("menu-joinable-team-call", to: directory, compact: true) { MenuBarPanel(store: joinable, rtc: joinable.rtc, loginItem: loginItem) }
+        let joinPending = store {
+            $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
+            $0.activeTeamCalls = [joinableRoom]
+            $0.joinRequests = [CallJoinRequest(id: "outgoing-join-request", status: "pending", requester: me, room: joinableRoom, expiresAt: "")]
+        }
+        snapshot("menu-join-request-pending", to: directory, compact: true) { MenuBarPanel(store: joinPending, rtc: joinPending.rtc, loginItem: loginItem) }
         let muted = store {
             $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
             $0.activeRoom = room; $0.callStartedAt = Date().addingTimeInterval(-62)

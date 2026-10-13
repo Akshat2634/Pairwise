@@ -53,7 +53,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     @Published private(set) var savedAudioOutputUnavailable = false
     @Published private(set) var localMicrophoneLevel = 0.0
     @Published private(set) var screenNetworkQuality: ScreenNetworkQuality = .measuring
+    @Published private(set) var screenShareQuality = ScreenShareQuality.load()
     @Published private(set) var isReconnecting = false
+    @Published private(set) var incomingClipboardTransfer: (senderName: String, message: ClipboardTransferMessage)?
+    @Published private(set) var clipboardSyncEnabled = false
+    @Published private(set) var clipboardSyncNotice: String?
 
     /// Called for captured local microphone and subscribed remote audio tracks.
     /// Buffers are copied to normalized Float samples before delivery. It remains
@@ -104,6 +108,10 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var localInputMonitor: Any?
     private var notificationTokens: [NSObjectProtocol] = []
     private var controlSendTail: Task<Void, Never>?
+    private var clipboardReplayWindow = ClipboardTransferReplayWindow()
+    private var clipboardSyncTask: Task<Void, Never>?
+    private var clipboardObservedChangeCount = 0
+    private var lastSharedClipboardText: String?
     private var queuedControlSends = 0
     private var controlTransportFailed = false
     private let maxQueuedControlSends = 256
@@ -200,6 +208,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         requestTimeoutTask = nil
         controlAvailabilityBySender.removeAll()
         remoteControlUnavailableReason = nil
+        incomingClipboardTransfer = nil
+        clipboardReplayWindow = ClipboardTransferReplayWindow()
+        setClipboardSyncEnabled(false)
         emergencyStop()
         resetIndependentCursors()
         controlTransportFailed = true
@@ -296,11 +307,21 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             screenNetworkQuality = .measuring
             return
         }
-        let roundTripTime = statistics.iceCandidatePair
-            .filter { $0.state == .succeeded && $0.nominated != false }
-            .compactMap(\.currentRoundTripTime)
-            .min()
+        let pairs = statistics.iceCandidatePair.map {
+            CandidatePairRTT(id: $0.id, roundTripTimeSeconds: $0.currentRoundTripTime)
+        }
+        let roundTripTime = ScreenNetworkQuality.selectedRoundTripTimeSeconds(
+            selectedPairID: statistics.transportStats?.selectedCandidatePairId,
+            pairs: pairs
+        )
         screenNetworkQuality = .from(roundTripTimeSeconds: roundTripTime)
+    }
+
+    /// Saves the host's sender-side quality choice for the next screen share.
+    /// A track that is already published keeps its current capture/encoding.
+    func setScreenShareQuality(_ quality: ScreenShareQuality) {
+        screenShareQuality = quality
+        quality.persist()
     }
 
     /// Audio leaves the SDK renderer only after an explicit local transcription opt-in.
@@ -338,8 +359,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             // Older viewers infer view-only from the ".window" suffix; newer
             // ones also receive explicit availability messages.
             let trackName = selectedWindow ? "pairdesk.screen.window" : "pairdesk.screen.display"
-            let captureOptions = ScreenShareCaptureOptions(dimensions: .h1440_169,
-                                                           fps: 30,
+            let quality = screenShareQuality
+            let captureOptions = ScreenShareCaptureOptions(dimensions: quality.dimensions,
+                                                           fps: quality.framesPerSecond,
                                                            showCursor: true,
                                                            appAudio: false,
                                                            includeCurrentApplication: true)
@@ -348,7 +370,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                                                                           options: captureOptions)
             pendingTrack = track
             let publishOptions = VideoPublishOptions(name: trackName,
-                                                     screenShareEncoding: VideoEncoding(maxBitrate: 5_000_000, maxFps: 30),
+                                                     screenShareEncoding: VideoEncoding(maxBitrate: quality.maxBitrate,
+                                                                                         maxFps: quality.framesPerSecond),
                                                      simulcast: false)
             _ = try await room.localParticipant.publish(videoTrack: track, options: publishOptions)
             shareTrack = track
@@ -746,6 +769,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             self.controlState = .unavailable
             self.audioForwardingConsented = false
             self.controlTransportFailed = true
+            self.incomingClipboardTransfer = nil
+            self.clipboardReplayWindow = ClipboardTransferReplayWindow()
+            self.setClipboardSyncEnabled(false)
         }
     }
 
@@ -849,6 +875,25 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     nonisolated func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data, forTopic topic: String, encryptionType: EncryptionType) {
+        if topic == Self.clipboardTopic, data.count <= ClipboardTransferMessage.maximumWireBytes,
+           let sender = participant?.identity?.stringValue {
+            Task { @MainActor [weak self] in
+                guard let self, self.room === room, let localIdentity = self.localIdentity,
+                      room.remoteParticipants.values.contains(where: { $0.identity?.stringValue == sender }),
+                      let message = try? ClipboardTransferMessage.decode(data, authenticatedSender: sender, localIdentity: localIdentity),
+                      self.clipboardReplayWindow.insert(message.id) else { return }
+                if self.clipboardSyncEnabled {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message.text, forType: .string)
+                    self.clipboardObservedChangeCount = NSPasteboard.general.changeCount
+                    self.lastSharedClipboardText = message.text
+                    self.clipboardSyncNotice = "Clipboard synced from \(self.participantName(for: sender))"
+                    return
+                }
+                self.incomingClipboardTransfer = (self.participantName(for: sender), message)
+            }
+            return
+        }
         guard topic == Self.controlTopic, data.count <= 2_048,
               let message = try? JSONDecoder().decode(RemoteControlMessage.self, from: data),
               let sender = participant?.identity?.stringValue
@@ -862,6 +907,65 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     // MARK: Data protocol
 
     nonisolated private static let controlTopic = "pairdesk.control.v1"
+    nonisolated private static let clipboardTopic = "pairdesk.clipboard.v1"
+
+    /// Sends text only after the user explicitly presses Send clipboard.
+    func sendClipboard(text: String, to identity: String) async throws {
+        guard let room, connected, identity != localIdentity,
+              room.remoteParticipants.values.contains(where: { $0.identity?.stringValue == identity }) else {
+            throw LiveKitError(.invalidState, message: "That teammate is no longer in this call.")
+        }
+        let message = try ClipboardTransferMessage(recipientIdentity: identity, text: text)
+        let data = try message.encoded()
+        let options = DataPublishOptions(name: "PairDesk clipboard", destinationIdentities: [Participant.Identity(from: identity)], topic: Self.clipboardTopic, reliable: true)
+        try await room.localParticipant.publish(data: data, options: options)
+    }
+
+    func pasteIncomingClipboardTransfer() {
+        guard let transfer = incomingClipboardTransfer else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(transfer.message.text, forType: .string)
+        incomingClipboardTransfer = nil
+    }
+
+    func dismissIncomingClipboardTransfer() { incomingClipboardTransfer = nil }
+
+    /// Clipboard sync is opt-in on each Mac, applies only to plain text during
+    /// this call, and is disabled again when the room disconnects.
+    func setClipboardSyncEnabled(_ enabled: Bool) {
+        clipboardSyncTask?.cancel()
+        clipboardSyncTask = nil
+        clipboardSyncEnabled = enabled && connected
+        clipboardSyncNotice = clipboardSyncEnabled ? "Text clipboard sync is on for this call" : nil
+        lastSharedClipboardText = nil
+        clipboardObservedChangeCount = NSPasteboard.general.changeCount
+        guard clipboardSyncEnabled else { return }
+        clipboardSyncTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                guard let self, self.connected, self.clipboardSyncEnabled else { return }
+                self.checkClipboardForChanges()
+            }
+        }
+    }
+
+    private func checkClipboardForChanges() {
+        let pasteboard = NSPasteboard.general
+        let changeCount = pasteboard.changeCount
+        guard changeCount != clipboardObservedChangeCount else { return }
+        clipboardObservedChangeCount = changeCount
+        guard let text = pasteboard.string(forType: .string), !text.isEmpty,
+              text.utf8.count <= ClipboardTransferMessage.maximumTextBytes,
+              text != lastSharedClipboardText else { return }
+        lastSharedClipboardText = text
+        for person in participants where !person.isLocal {
+            Task { @MainActor [weak self] in
+                do { try await self?.sendClipboard(text: text, to: person.identity) }
+                catch { self?.error = error.localizedDescription }
+            }
+        }
+        clipboardSyncNotice = "Copied text shared with teammates on this call"
+    }
     private static let allowedModifierMask = CGEventFlags.maskShift.rawValue |
         CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue |
         CGEventFlags.maskCommand.rawValue | CGEventFlags.maskSecondaryFn.rawValue

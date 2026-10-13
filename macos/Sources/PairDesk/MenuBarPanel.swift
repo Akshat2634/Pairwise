@@ -8,7 +8,6 @@ struct MenuBarPanel: View {
     @ObservedObject private var permissions = PermissionManager.shared
     @Environment(\.openWindow) private var openWindow
     @State private var searchText = ""
-    @State private var addingPerson = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -19,7 +18,13 @@ struct MenuBarPanel: View {
             } else {
                 statusRow
                 if let incoming = store.incomingCall { incomingCall(incoming) }
-                if store.activeRoom != nil { inCall } else { roster }
+                if store.activeRoom != nil {
+                    inCall
+                    Divider()
+                    roster
+                } else {
+                    roster
+                }
                 if let message = store.callMessage { Text(message).font(.caption).foregroundStyle(Theme.textMuted) }
                 if let error = store.error ?? rtc.error {
                     HStack(alignment: .top, spacing: 8) {
@@ -57,6 +62,20 @@ struct MenuBarPanel: View {
                 Toggle("Start at login", isOn: Binding(get: { loginItem.enabled }, set: { loginItem.setEnabled($0) }))
                 Toggle("Start calls muted", isOn: $store.startCallsMuted)
                 Toggle("Play call sounds", isOn: $store.playCallSounds)
+                Menu("Screen-share quality · \(rtc.screenShareQuality.title)") {
+                    ForEach(ScreenShareQuality.allCases) { quality in
+                        Button {
+                            rtc.setScreenShareQuality(quality)
+                        } label: {
+                            if rtc.screenShareQuality == quality {
+                                Label(quality.title, systemImage: "checkmark")
+                            } else {
+                                Text(quality.title)
+                            }
+                        }
+                    }
+                    Text("Applies to your next screen share")
+                }
                 if loginItem.needsApproval { Button("Approve automatic startup…") { loginItem.openSettings() } }
                 Divider()
                 Button("Quit PairDesk") { NSApp.terminate(nil) }
@@ -74,12 +93,10 @@ struct MenuBarPanel: View {
             Circle().fill(teamConnected ? Theme.online : Theme.attention).frame(width: 6, height: 6)
             Text(store.directoryStatus).font(.caption).foregroundStyle(Theme.textMuted)
             Spacer()
-            if store.activeRoom == nil {
-                Text("\(teammates.count)").font(.caption.monospacedDigit()).foregroundStyle(Theme.textMuted)
-                Button { Task { await store.refresh() } } label: {
-                    Image(systemName: "arrow.clockwise").font(.caption).foregroundStyle(Theme.textMuted)
-                }.buttonStyle(.plain).help("Refresh contacts").accessibilityLabel("Refresh contacts")
-            }
+            Text("\(teammates.count)").font(.caption.monospacedDigit()).foregroundStyle(Theme.textMuted)
+            Button { Task { await store.refresh() } } label: {
+                Image(systemName: "arrow.clockwise").font(.caption).foregroundStyle(Theme.textMuted)
+            }.buttonStyle(.plain).help("Refresh contacts").accessibilityLabel("Refresh contacts")
         }
     }
 
@@ -118,6 +135,7 @@ struct MenuBarPanel: View {
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("ON THIS CALL · \(rtc.participants.filter { !$0.isLocal }.count + 1)")
                 ForEach(rtc.participants.filter { !$0.isLocal }) { person in
                     HStack(spacing: 10) {
                         PersonAvatar(name: person.name, id: person.identity, size: 28)
@@ -135,6 +153,25 @@ struct MenuBarPanel: View {
                         }
                         Spacer()
                         Button("Cancel") { Task { await store.cancelCall(invitation) } }.buttonStyle(QuietButtonStyle(compact: true))
+                    }
+                }
+            }
+            if !store.incomingJoinRequests.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    sectionHeader("JOIN REQUESTS")
+                    ForEach(store.incomingJoinRequests) { request in
+                        HStack(spacing: 8) {
+                            PersonAvatar(name: request.requester.name, id: request.requester.id, size: 26)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(request.requester.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                                Text("Wants to join this call").font(.caption).foregroundStyle(Theme.textMuted)
+                            }
+                            Spacer(minLength: 4)
+                            Button("Decline") { Task { await store.declineJoinRequest(request) } }
+                                .buttonStyle(QuietButtonStyle(compact: true)).disabled(store.busy)
+                            Button("Accept") { Task { await store.acceptJoinRequest(request) } }
+                                .buttonStyle(PrimaryButtonStyle()).disabled(store.busy || !store.canAddPerson)
+                        }
                     }
                 }
             }
@@ -163,25 +200,12 @@ struct MenuBarPanel: View {
                 Button("Microphone access needed to talk…") { show("permissions") }.buttonStyle(.plain).font(.caption).foregroundStyle(Theme.accent)
             }
             if rtc.isSharing { sharingStatus }
-            Divider()
             HStack {
-                if store.canAddPerson {
-                    Button { addingPerson.toggle() } label: { Label(addingPerson ? "Done" : "Add person", systemImage: addingPerson ? "checkmark" : "person.badge.plus") }
-                        .buttonStyle(QuietButtonStyle())
-                } else {
+                if !store.canAddPerson {
                     Text("Call is full · four people").font(.caption).foregroundStyle(Theme.textMuted)
                 }
                 Spacer()
                 Button("End call") { Task { await store.leave(playSound: true) } }.buttonStyle(DangerButtonStyle())
-            }
-            if addingPerson && store.canAddPerson {
-                VStack(alignment: .leading, spacing: 4) {
-                    sectionHeader("Add to this call")
-                    if store.availablePeople.isEmpty {
-                        Text("No one else is available right now").font(.caption).foregroundStyle(Theme.textMuted).padding(.horizontal, 8)
-                    }
-                    ForEach(store.availablePeople) { person in contactRow(person) }
-                }
             }
         }
     }
@@ -255,13 +279,15 @@ struct MenuBarPanel: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         if !onlineTeammates.isEmpty { contactSection("Online", people: onlineTeammates) }
+                        if store.activeRoom == nil && !orphanedJoinRequests.isEmpty { joinRequestSection }
+                        if store.activeRoom == nil && !store.activeTeamCalls.isEmpty { activeCallsSection }
                         if !offlineTeammates.isEmpty { contactSection("Offline", people: offlineTeammates) }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 // Take the list's real height, scrolling only past the cap. The
                 // menu bar window settles on the panel's minimum height, so an
                 // estimate clipped short rosters.
-                .frame(maxHeight: 420)
+                .frame(maxHeight: store.activeRoom == nil ? 420 : 300)
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -280,6 +306,70 @@ struct MenuBarPanel: View {
     }
     private var onlineTeammates: [TeamUser] { filteredTeammates.filter { $0.online == true } }
     private var offlineTeammates: [TeamUser] { filteredTeammates.filter { $0.online != true } }
+    private var orphanedJoinRequests: [CallJoinRequest] {
+        store.outgoingJoinRequests.filter { request in
+            !store.activeTeamCalls.contains(where: { $0.id == request.room.id })
+        }
+    }
+
+    private var joinRequestSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sectionHeader("JOIN REQUESTS")
+            ForEach(orphanedJoinRequests) { request in
+                HStack(spacing: 8) {
+                    Image(systemName: "hourglass").font(.caption).foregroundStyle(Theme.attention).frame(width: 28)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Waiting to join \(callNames(request.room))").font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        Text("Your request is waiting for someone to accept").font(.caption).foregroundStyle(Theme.textMuted).lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Button("Cancel") { Task { await store.cancelJoinRequest(request) } }
+                        .buttonStyle(QuietButtonStyle(compact: true)).disabled(store.busy)
+                }.padding(.horizontal, 8).frame(minHeight: 38)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var activeCallsSection: some View {
+        let calls = store.activeTeamCalls.filter { $0.id != store.activeRoom?.id }
+        if !calls.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                sectionHeader("ACTIVE TEAM CALLS")
+                ForEach(calls) { room in activeCallRow(room) }
+            }
+        }
+    }
+
+    private func activeCallRow(_ room: PairRoom) -> some View {
+        let pendingRequest = store.outgoingJoinRequests.first { $0.room.id == room.id }
+        return HStack(spacing: 8) {
+            HStack(spacing: -7) {
+                ForEach(Array(room.participants.prefix(3))) { participant in
+                    PersonAvatar(name: participant.name, id: participant.id, size: 25, circular: true)
+                        .overlay(Circle().stroke(Theme.surface, lineWidth: 2))
+                }
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(callNames(room)).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Text(pendingRequest == nil ? "\(room.participantCount) people · active call" : "Request sent · waiting for acceptance")
+                    .font(.caption).foregroundStyle(Theme.textMuted)
+            }
+            Spacer(minLength: 4)
+            if let pendingRequest {
+                Button("Cancel") { Task { await store.cancelJoinRequest(pendingRequest) } }
+                    .buttonStyle(QuietButtonStyle(compact: true)).disabled(store.busy)
+            } else {
+                Button("Request to join") { Task { await store.requestToJoin(room) } }
+                    .buttonStyle(QuietButtonStyle(compact: true)).disabled(store.busy || store.activeRoom != nil)
+            }
+        }.padding(.horizontal, 8).frame(minHeight: 42)
+    }
+
+    private func callNames(_ room: PairRoom) -> String {
+        let names = room.participants.map(\.name)
+        return names.isEmpty ? room.name : names.joined(separator: " · ")
+    }
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.textMuted).padding(.horizontal, 8).padding(.bottom, 2)

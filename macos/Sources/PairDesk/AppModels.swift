@@ -22,6 +22,8 @@ struct LoginResponse: Decodable { let token: String; let user: TeamUser; let exp
 struct MeResponse: Decodable { let user: TeamUser }
 struct UsersResponse: Decodable { let users: [TeamUser] }
 struct RoomsResponse: Decodable { let rooms: [PairRoom] }
+struct ActiveCallsResponse: Decodable { let calls: [PairRoom] }
+struct JoinRequestsResponse: Decodable { let requests: [CallJoinRequest] }
 struct RoomResponse: Decodable { let room: PairRoom }
 struct JoinResponse: Decodable { let room: PairRoom; let url: String; let token: String; let participantIdentity: String }
 struct ErrorResponse: Decodable { let error: String }
@@ -43,3 +45,11 @@ struct CallInvitation: Decodable, Identifiable, Equatable {
 }
 struct CallResponse: Decodable { let call: CallInvitation }
 struct CallsResponse: Decodable { let calls: [CallInvitation] }
+struct CallJoinRequest: Decodable, Identifiable, Equatable {
+    let id: String
+    let status: String
+    let requester: TeamUser
+    let room: PairRoom
+    let expiresAt: String
+}
+struct CallJoinRequestResponse: Decodable { let request: CallJoinRequest }

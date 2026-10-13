@@ -43,12 +43,22 @@ type CallInvitation struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
 }
+type CallJoinRequest struct {
+	ID          string    `json:"id"`
+	RequesterID string    `json:"requesterId"`
+	RoomID      string    `json:"roomId"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	ExpiresAt   time.Time `json:"expiresAt"`
+}
 type State struct {
-	Users    map[string]User           `json:"users"`
-	Sessions map[string]Session        `json:"sessions"`
-	Rooms    map[string]Room           `json:"rooms"`
-	Presence map[string]time.Time      `json:"presence"`
-	Calls    map[string]CallInvitation `json:"calls"`
+	Users        map[string]User            `json:"users"`
+	Sessions     map[string]Session         `json:"sessions"`
+	Rooms        map[string]Room            `json:"rooms"`
+	Presence     map[string]time.Time       `json:"presence"`
+	Calls        map[string]CallInvitation  `json:"calls"`
+	JoinRequests map[string]CallJoinRequest `json:"joinRequests,omitempty"`
 }
 type Store struct {
 	mu   sync.Mutex
@@ -57,7 +67,7 @@ type Store struct {
 }
 
 func OpenStore(path string) (*Store, error) {
-	st := &Store{path: path, s: State{Users: map[string]User{}, Sessions: map[string]Session{}, Rooms: map[string]Room{}, Presence: map[string]time.Time{}, Calls: map[string]CallInvitation{}}}
+	st := &Store{path: path, s: State{Users: map[string]User{}, Sessions: map[string]Session{}, Rooms: map[string]Room{}, Presence: map[string]time.Time{}, Calls: map[string]CallInvitation{}, JoinRequests: map[string]CallJoinRequest{}}}
 	b, e := os.ReadFile(path)
 	if e == nil {
 		if e = json.Unmarshal(b, &st.s); e != nil {
@@ -77,6 +87,9 @@ func OpenStore(path string) (*Store, error) {
 		}
 		if st.s.Calls == nil {
 			st.s.Calls = map[string]CallInvitation{}
+		}
+		if st.s.JoinRequests == nil {
+			st.s.JoinRequests = map[string]CallJoinRequest{}
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return nil, e
