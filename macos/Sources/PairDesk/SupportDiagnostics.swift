@@ -25,6 +25,7 @@ enum SupportDiagnostics {
         Screen sharing: \(rtc.isSharing ? "yes" : (rtc.screenTrack == nil ? "no" : "viewing"))
         Microphone: \(rtc.isMicrophoneEnabled ? "on" : "off")
         Screen RTT: \(rtc.screenNetworkQuality.label)
+        Received screen stream: \(rtc.screenStreamMetrics.summary)
         Selected ICE route: \(route)
         Current error category: \(errorCategory)
 

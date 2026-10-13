@@ -99,6 +99,9 @@ struct SharedScreenWindow: View {
                     Label(rtc.screenNetworkQuality.label, systemImage: "waveform.path")
                         .font(.caption).foregroundStyle(networkQualityColor).lineLimit(1)
                         .help("Estimated shared-screen network round-trip time. This does not measure image readability or local CPU load.")
+                    Label(rtc.screenStreamMetrics.summary, systemImage: "rectangle.inset.filled")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .help("Measured resolution, frame rate, and cumulative received-stream packet loss. These are viewer-side WebRTC statistics, not a full picture-quality score.")
                 }
                 Spacer()
                 Button {
