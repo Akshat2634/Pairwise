@@ -28,9 +28,11 @@ fi
 if [ -z "$SIGNING_IDENTITY" ]; then
   if security find-identity -p codesigning | grep -F "\"$LOCAL_SIGNING_IDENTITY\"" >/dev/null; then
     SIGNING_IDENTITY=$LOCAL_SIGNING_IDENTITY
-  else
+  elif [ "${PAIRDESK_ALLOW_ADHOC:-0}" = "1" ]; then
     SIGNING_IDENTITY=-
-    echo "build-app: ad-hoc signing. macOS will treat this build as a new app: the saved sign-in asks for the Mac password and permissions may need approval again. Run scripts/create-signing-identity.sh once to avoid this." >&2
+    echo "build-app: ad-hoc signing. macOS treats this build as a new app: the saved sign-in asks for the Mac password twice and permissions may need approval again." >&2
+  else
+    fail "no signing identity. Run 'sh scripts/create-signing-identity.sh' once on this Mac so every build keeps the same identity (otherwise each install asks for the keychain password twice). To build ad-hoc anyway, set PAIRDESK_ALLOW_ADHOC=1."
   fi
 fi
 
