@@ -18,7 +18,7 @@ Pairwise is a macOS-first, open-source pairing client for a 10–15 person inter
 | Transcription | Optional local Whisper Tiny transcript, in-memory by default, user-triggered text export | Tuple documents local capture/transcription options; broad recording features are outside Pairwise's scope | Appropriate differentiator for privacy. Improve only around local consent, clear status, cancellation, crash cleanup, and technical vocabulary quality. |
 | Install and updates | Build/package scripts and test DMGs exist; automatic login-item support exists | Tuple and Hopp offer packaged apps and update paths | Not release-ready. No Developer ID identity is installed, no notarized public release exists, and no in-app updater is implemented. Source ZIP is not an installer. |
 | Reliability and diagnostics | API/LiveKit integration tests, race tests, TURN/TLS checks, synthetic screen transport tests; viewer RTT indicator and reconnect status | Mature calling tools provide reconnect handling, clear call state, and support diagnostics | Automated transport evidence is useful. Reconnect status now appears in the viewer and menu bar; remote input is released and host control pauses safely during recovery, then resumes if it was enabled. Actual voice, capture, control, sleep/wake, display changes, and latest macOS permission behavior still need two physical Macs. No support diagnostics bundle or packet-loss indicator exists. |
-| Administration and operations | Admin account list, create, enable/disable, and password reset in app; liveness and media readiness endpoints; GCP uptime check for API plus LiveKit readiness from Asia, Europe, and US Midwest | Tuple includes team roles, account management, integrations, and SSO; Hopp offers self-hosting and managed service | Account operations and dependency readiness are implemented. The uptime check measures TLS and media readiness every five minutes. Alert notifications, tested backup restore, and real media-network validation remain. |
+| Administration and operations | Admin account list, create, enable/disable, and password reset in app; liveness and media readiness endpoints; GCP uptime check for API plus LiveKit readiness from Asia, Europe, and US Midwest | Tuple includes team roles, account management, integrations, and SSO; Hopp offers self-hosting and managed service | Account operations and dependency readiness are implemented. The uptime check measures TLS and media readiness every five minutes. A plan-only alert creation script is ready, but no policy is deployed until a verified notification channel is selected and GCP reauthentication succeeds. Tested backup restore and real media-network validation remain. |
 
 ## Permission answer
 
@@ -58,7 +58,7 @@ The in-call menu includes a local-only mic level meter. Device selectors and the
 
 ### P2 — Finish internal operations
 
-Administrator password reset and account enable/disable are now available in the app, with session revocation and protection against disabling the last admin. `/healthz` reports process liveness and `/readyz` checks LiveKit reachability without exposing credentials. Add production monitoring and backup-restore drills for GCP, a local call diagnostics bundle that omits secrets/audio/screen content, and a versioned release/update path. Keep SSO, external integrations, and enterprise audit features out of this phase.
+Administrator password reset and account enable/disable are now available in the app, with session revocation and protection against disabling the last admin. `/healthz` reports process liveness and `/readyz` checks LiveKit reachability without exposing credentials. Apply the GCP uptime alert after selecting a verified notification channel, then run a backup-restore drill against a disposable recovery target. A local support diagnostics bundle and versioned release/update path remain. Keep SSO, external integrations, and enterprise audit features out of this phase.
 
 ## Deliberately not pursuing now
 
@@ -73,3 +73,4 @@ Camera/video, call recording, cloud transcripts, public guest links, cross-platf
 - [Hopp project and self-hosting overview](https://github.com/gethopp/hopp)
 - [Hopp feature documentation](https://docs.gethopp.app/)
 - [Hopp macOS permission/onboarding and reliability changelog](https://www.gethopp.app/changelog)
+- [Google Cloud uptime-check alert policies](https://docs.cloud.google.com/monitoring/uptime-checks/uptime-alerting-policies)
