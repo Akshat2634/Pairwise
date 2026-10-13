@@ -11,11 +11,10 @@ final class AppStore: ObservableObject {
     @Published var adminUsers: [TeamUser] = []
     @Published var rooms: [PairRoom] = []
     @Published var callInvitations: [CallInvitation] = []
-    /// One-line call status ("Harshit accepted your call."). Clears itself
-    /// after a few seconds and on every new call; it used to outlive the call
-    /// it described and show up during the next one.
+    @Published var joinRequests: [CallJoinRequest] = []
+    @Published var activeTeamCalls: [PairRoom] = []
+    /// One-line call status clears itself instead of leaking into the next call.
     @Published var callMessage: String? { didSet { scheduleCallMessageExpiry() } }
-    private var callMessageExpiry: Task<Void, Never>?
     @Published var activeRoom: PairRoom?
     @Published var callStartedAt: Date?
     @Published var busy = false
@@ -36,6 +35,7 @@ final class AppStore: ObservableObject {
     private var token: String?
     private var refreshTask: Task<Void, Never>?
     private var callRefreshTask: Task<Void, Never>?
+    private var callMessageExpiry: Task<Void, Never>?
     private var observedCallStatuses: [String: String] = [:]
     private var attentionRequest: Int?
     private var autoVoiceCallID: String?
@@ -43,6 +43,14 @@ final class AppStore: ObservableObject {
 
     var incomingCall: CallInvitation? { callInvitations.first { $0.status == "pending" && $0.target.id == user?.id } }
     var outgoingCalls: [CallInvitation] { callInvitations.filter { $0.status == "pending" && $0.caller.id == user?.id } }
+    var incomingJoinRequests: [CallJoinRequest] {
+        joinRequests.filter { request in
+            request.status == "pending" && request.room.participants.contains { $0.id == user?.id }
+        }
+    }
+    var outgoingJoinRequests: [CallJoinRequest] {
+        joinRequests.filter { $0.status == "pending" && $0.requester.id == user?.id }
+    }
     var canAddPerson: Bool { activeRoom != nil && rtc.participants.count + outgoingCalls.count < 4 }
     var availablePeople: [TeamUser] {
         users.filter { person in
@@ -203,7 +211,14 @@ final class AppStore: ObservableObject {
             let response: CallsResponse = try await api.request("v1/calls")
             guard user?.id == currentUser.id, pollSequence == invitationPollSequence else { return }
             let oldStatuses = observedCallStatuses
+            let oldJoinStatuses = Dictionary(uniqueKeysWithValues: joinRequests.map { ($0.id, $0.status) })
             callInvitations = response.calls
+            // Direct calls remain available with an older deployed server;
+            // team-call discovery appears as soon as its API is upgraded.
+            let requestResponseValue: JoinRequestsResponse? = try? await api.request("v1/join-requests")
+            if let requestResponseValue { joinRequests = requestResponseValue.requests }
+            let activeCallsValue: ActiveCallsResponse? = try? await api.request("v1/active-calls")
+            if let activeCallsValue { activeTeamCalls = activeCallsValue.calls }
             observedCallStatuses = Dictionary(uniqueKeysWithValues: response.calls.map { ($0.id, $0.status) })
             if let incoming = incomingCall, oldStatuses[incoming.id] == nil {
                 if playCallSounds { NSSound(named: NSSound.Name("Glass"))?.play() }
@@ -230,9 +245,61 @@ final class AppStore: ObservableObject {
                     if activeRoom?.id == invitation.room.id, rtc.participants.count <= 1, outgoingCalls.isEmpty { await leave() }
                 }
             }
+            if activeRoom == nil, !busy,
+               let accepted = requestResponseValue?.requests.first(where: {
+                   $0.requester.id == currentUser.id && $0.status == "accepted" && oldJoinStatuses[$0.id] == "pending"
+               }) {
+                await joinInternal(accepted.room)
+                if activeRoom != nil && !startCallsMuted {
+                    do { try await rtc.setMicrophoneEnabled(true) }
+                    catch { self.error = error.localizedDescription }
+                }
+            }
         } catch {
             // Directory heartbeat handles authentication/server errors. Polling resumes on the next tick.
         }
+    }
+
+    func requestToJoin(_ room: PairRoom) async {
+        guard !busy, activeRoom == nil, user != nil else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            struct Empty: Encodable {}
+            let _: CallJoinRequestResponse = try await api.post("v1/rooms/\(room.id)/join-requests", body: Empty())
+            callMessage = "Join request sent to everyone in the call."
+            await refreshInvitations()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func acceptJoinRequest(_ request: CallJoinRequest) async {
+        guard !busy, activeRoom != nil else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            struct Empty: Encodable {}
+            let _: CallJoinRequestResponse = try await api.post("v1/join-requests/\(request.id)/accept", body: Empty())
+            callMessage = "\(request.requester.name) is joining the call."
+            await refreshInvitations()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func declineJoinRequest(_ request: CallJoinRequest) async {
+        guard !busy else { return }
+        do {
+            struct Empty: Encodable {}
+            let _: CallJoinRequestResponse = try await api.post("v1/join-requests/\(request.id)/decline", body: Empty())
+            await refreshInvitations()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func cancelJoinRequest(_ request: CallJoinRequest) async {
+        guard !busy else { return }
+        do {
+            struct Empty: Encodable {}
+            let _: CallJoinRequestResponse = try await api.post("v1/join-requests/\(request.id)/cancel", body: Empty())
+            await refreshInvitations()
+        } catch { self.error = error.localizedDescription }
     }
 
     func call(_ person: TeamUser) async {

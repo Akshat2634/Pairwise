@@ -22,7 +22,7 @@ Pairwise uses Apple's native ScreenCaptureKit content-sharing picker. A person c
 
 Remote mouse and keyboard input is optional. macOS requires the person at the shared Mac to grant Pairwise Accessibility access before input can be injected. Voice uses the microphone only after the person enables it. The app never starts capture, microphone, or transcription just by launching.
 
-The 0.4.0 source adds [separate named cursors](docs/separate-cursors.md): viewers can point without moving the owner's mouse, while clicks, drags, scrolling, and typing use one control stream. Install the same new build on both Macs for this mode. The coloured viewer pointer travels with the video, and remote actions still share macOS's single focus. Two-Mac acceptance of this new mode remains pending.
+The 0.5.0 source adds opt-in [text clipboard sharing](docs/clipboard-sharing.md), direct-call roster and group-call join requests, screen-share quality presets, and clearer in-call controls. Clipboard sync must be enabled on both Macs and is active only during a call. The source also includes separate named cursors from 0.4.0. Two-Mac testing is still required for clipboard sync, group-call joining, cursor responsiveness, and perceived screen quality; these are not verified by unit tests.
 
 ## Build and run locally
 
@@ -53,7 +53,7 @@ sh scripts/prepare-whisper.sh
 sh scripts/build-app.sh
 ```
 
-The whisper.cpp source and Tiny model download into ignored `.cache/` and are checked against pinned revisions/checksums. They are not committed. Run `sh scripts/create-signing-identity.sh` once on the Mac that builds PairDesk, and `build-app.sh` signs every build with that same self-signed identity. Without it, `build-app.sh` stops, because an ad-hoc build is a new app to macOS each time: the saved sign-in asks for the Mac password (twice) after every install, and permissions may need approval again. Set `PAIRDESK_ALLOW_ADHOC=1` to build ad-hoc deliberately. Distributing outside your team's Macs still requires a Developer ID signature and Apple notarization. See [Apple's notarization guide](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+The whisper.cpp source and Tiny model download into ignored `.cache/` and are checked against pinned revisions/checksums. They are not committed. Run `sh scripts/create-signing-identity.sh` once on the Mac that builds PairDesk, and `build-app.sh` signs every build with that same self-signed identity. Without it, `build-app.sh` stops because an ad-hoc build is a new app to macOS each time: the saved sign-in asks for the Mac password (twice) after every install, and permissions may need approval again. Set `PAIRDESK_ALLOW_ADHOC=1` to build ad-hoc deliberately. Distributing outside your team's Macs still requires a Developer ID signature and Apple notarization. See [Apple's notarization guide](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
 
 ## Tests
 

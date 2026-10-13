@@ -23,9 +23,13 @@ All endpoints use JSON. Protected routes require `Authorization: Bearer <token>`
 - `GET /v1/users` → `{ "users":[{"id":"...","name":"...","email":"...","online":true}] }`
 - `POST /v1/heartbeat` `{}` → `{ "ok":true }`; marks the signed-in user online for 30 seconds.
 - `GET /v1/rooms` → `{ "rooms":[{"id":"...","name":"...","participantCount":0,"participants":[]}] }`. Participant list/count reflects active API reservations, not a LiveKit admin query.
+- `GET /v1/active-calls` → `{ "calls":[{"id":"...","name":"Direct call","participantCount":2,"participants":[...]}] }`; exposes active private calls to authenticated teammates so they can request to join. Calls with fewer than two live reservations are omitted.
 - `POST /v1/rooms` `{ "name":"..." }` → HTTP 201 `{ "room": {"id":"...","name":"...","participantCount":0,"participants":[]} }`
 - `POST /v1/rooms/{id}/join` `{}` → `{ "room":{"id":"...","name":"...","participantCount":1}, "url":"ws://...", "token":"<LiveKit JWT>", "participantIdentity":"<stable user id>" }`
 - `POST /v1/rooms/{id}/share` `{ "enabled":true|false }` → HTTP 204. One current room member can claim screen sharing; a competing claim returns HTTP 409. The server updates that connected LiveKit participant to microphone plus screen-share sources.
+- `POST /v1/rooms/{id}/join-requests` `{}` → HTTP 201 `{ "request": {"id":"...","status":"pending","requester":{...},"room":{...},"expiresAt":"<RFC3339>"} }`; an online teammate can request to join an active private call. Duplicate requests to the same call are idempotent; one pending request per user is allowed and it expires after 45 seconds.
+- `GET /v1/join-requests` → `{ "requests":[...] }` for the requester and active members of the relevant call. Any active call member may accept or decline; only the requester may cancel. The first acceptance reserves a room seat and authorizes that requester to join; later accept/decline attempts conflict.
+- `POST /v1/join-requests/{id}/accept|decline|cancel` `{}` → `{ "request": { ... } }`. The room must still have at least two active participants at acceptance time.
 - `POST /v1/rooms/{id}/leave` `{}` → `{ "ok":true }`; releases any share claim and its screen permission.
 - `POST /v1/rooms/{id}/heartbeat` `{}` → `{ "ok":true }`; refreshes the room reservation. A room heartbeat before joining returns 403.
 - `POST /v1/calls` `{ "userId":"<teammate id>" }` starts a private direct call; include `roomId` to invite into a room where the caller is already an active member. The target must be enabled, online, and not busy. Returns HTTP 201 `{ "call": {"id":"...","status":"pending","caller":{...},"target":{...},"room":{"id":"...","name":"Direct call","participantCount":2,"participants":[...]},"expiresAt":"<RFC3339>"} }`.

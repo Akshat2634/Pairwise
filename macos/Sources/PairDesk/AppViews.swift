@@ -60,6 +60,7 @@ struct SharedScreenWindow: View {
     @ObservedObject var rtc: RTCService
     @ObservedObject var transcripts: WhisperTranscriber
     @State private var showTranscript = false
+    @State private var showClipboard = false
     @State private var permissions = false
     @State private var sourcePicker = false
     private var shareStatus: String? {
@@ -100,7 +101,35 @@ struct SharedScreenWindow: View {
                         .help("Estimated shared-screen network round-trip time. This does not measure image readability or local CPU load.")
                 }
                 Spacer()
-                Button { Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } } } label: { Image(systemName: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash") }
+                Button {
+                    Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } }
+                } label: {
+                    Label(rtc.isMicrophoneEnabled ? "Mute" : "Unmute", systemImage: rtc.isMicrophoneEnabled ? "mic.fill" : "mic.slash.fill")
+                }
+                .buttonStyle(.bordered)
+                .tint(rtc.isMicrophoneEnabled ? Theme.accent : Theme.attention)
+                .help(rtc.isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone")
+                .accessibilityLabel(rtc.isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone")
+                Button { showClipboard = true } label: {
+                    Label("Clipboard", systemImage: "doc.on.clipboard")
+                }
+                .buttonStyle(.bordered)
+                .help("Send text to a teammate or paste received text on this Mac")
+                Menu {
+                    if store.availablePeople.isEmpty {
+                        Text("No one else is available right now")
+                    } else {
+                        ForEach(store.availablePeople) { person in
+                            Button { Task { await store.call(person) } } label: {
+                                Label(person.name, systemImage: "phone.fill")
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Add teammate", systemImage: "person.badge.plus")
+                }
+                .disabled(!store.canAddPerson || store.busy)
+                .help(store.canAddPerson ? "Add someone to this call" : "This call is full")
                 Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { sourcePicker = true } }
                 if rtc.isSharing { Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy) }
                 Button { showTranscript.toggle() } label: { Image(systemName: "text.bubble") }.help("Local transcript")
@@ -157,8 +186,27 @@ struct SharedScreenWindow: View {
                 do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
         }
+        .onChange(of: rtc.incomingClipboardTransfer?.message.id) { _, offerID in
+            if offerID != nil { showClipboard = true }
+        }
         .sheet(isPresented: $permissions) { PermissionsView() }
         .sheet(isPresented: $sourcePicker) { ScreenSharePickerView(store: store) }
+        .sheet(isPresented: $showClipboard) {
+            ClipboardTransferView(
+                peers: rtc.participants.filter { !$0.isLocal }.map { ClipboardPeer(identity: $0.identity, name: $0.name) },
+                incoming: rtc.incomingClipboardTransfer,
+                onSend: { text, identity in
+                    Task { do { try await rtc.sendClipboard(text: text, to: identity) } catch { store.error = error.localizedDescription } }
+                },
+                onPaste: { rtc.pasteIncomingClipboardTransfer() },
+                onDismiss: { rtc.dismissIncomingClipboardTransfer() },
+                clipboardSyncEnabled: rtc.clipboardSyncEnabled,
+                clipboardSyncNotice: rtc.clipboardSyncNotice,
+                onToggleSync: { rtc.setClipboardSyncEnabled($0) }
+            )
+            .padding(20)
+            .frame(width: 460)
+        }
         .alert("PairDesk", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) { Button("OK") { store.error = nil } } message: { Text(store.error ?? "") }
     }
 

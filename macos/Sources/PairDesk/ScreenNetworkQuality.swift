@@ -1,5 +1,10 @@
 import Foundation
 
+struct CandidatePairRTT: Equatable {
+    let id: String
+    let roundTripTimeSeconds: Double?
+}
+
 enum ScreenNetworkQuality: Equatable {
     case measuring
     case good(roundTripMilliseconds: Int)
@@ -12,6 +17,14 @@ enum ScreenNetworkQuality: Equatable {
         if milliseconds <= 150 { return .good(roundTripMilliseconds: milliseconds) }
         if milliseconds <= 300 { return .fair(roundTripMilliseconds: milliseconds) }
         return .highLatency(roundTripMilliseconds: milliseconds)
+    }
+
+    /// Returns the RTT of the ICE pair selected by the transport. Other
+    /// succeeded/nominated pairs can be probes or stale alternatives and must
+    /// not make the active media path look faster than it is.
+    static func selectedRoundTripTimeSeconds(selectedPairID: String?, pairs: [CandidatePairRTT]) -> Double? {
+        guard let selectedPairID, !selectedPairID.isEmpty else { return nil }
+        return pairs.first(where: { $0.id == selectedPairID })?.roundTripTimeSeconds
     }
 
     var label: String {
