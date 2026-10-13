@@ -56,6 +56,7 @@ struct MenuBarPanel: View {
                 if store.user != nil { Button("Account settings…") { show("account") } }
                 Toggle("Start at login", isOn: Binding(get: { loginItem.enabled }, set: { loginItem.setEnabled($0) }))
                 Toggle("Start calls muted", isOn: $store.startCallsMuted)
+                Toggle("Play call sounds", isOn: $store.playCallSounds)
                 if loginItem.needsApproval { Button("Approve automatic startup…") { loginItem.openSettings() } }
                 Divider()
                 Button("Quit PairDesk") { NSApp.terminate(nil) }
@@ -171,7 +172,7 @@ struct MenuBarPanel: View {
                     Text("Call is full · four people").font(.caption).foregroundStyle(Theme.textMuted)
                 }
                 Spacer()
-                Button("End call") { Task { await store.leave() } }.buttonStyle(DangerButtonStyle())
+                Button("End call") { Task { await store.leave(playSound: true) } }.buttonStyle(DangerButtonStyle())
             }
             if addingPerson && store.canAddPerson {
                 VStack(alignment: .leading, spacing: 4) {

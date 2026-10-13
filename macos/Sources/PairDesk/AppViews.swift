@@ -105,7 +105,7 @@ struct SharedScreenWindow: View {
                 if rtc.isSharing { Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy) }
                 Button { showTranscript.toggle() } label: { Image(systemName: "text.bubble") }.help("Local transcript")
                 Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
-                Button("Hang up") { Task { await store.leave() } }.tint(.red)
+                Button("Hang up") { Task { await store.leave(playSound: true) } }.tint(.red)
             }.buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 9)
             HStack(spacing: 0) {
                 ZStack {
@@ -275,6 +275,7 @@ struct AccountView: View {
     @State private var saving = false
     @State private var addingMember = false
     @State private var managingTeam = false
+    @State private var showingDiagnostics = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(store.user?.name ?? "Account").font(.title2.bold())
@@ -287,6 +288,7 @@ struct AccountView: View {
             Toggle("Start PairDesk at login", isOn: Binding(get: { loginItem.enabled }, set: { loginItem.setEnabled($0) }))
             if let message = loginItem.message { Text(message).font(.caption).foregroundStyle(.secondary) }
             if loginItem.needsApproval { Button("Open Login Items settings") { loginItem.openSettings() } }
+            Button("Review support diagnostics…") { showingDiagnostics = true }.buttonStyle(.bordered)
             Divider()
             Text("Change password").font(.headline)
             SecureField("Current password", text: $current).textFieldStyle(.roundedBorder)
@@ -296,6 +298,7 @@ struct AccountView: View {
         }.padding(30).frame(width: 430)
             .sheet(isPresented: $addingMember) { CreateMemberView(store: store) }
             .sheet(isPresented: $managingTeam) { ManageTeamView(store: store) }
+            .sheet(isPresented: $showingDiagnostics) { SupportDiagnosticsView(store: store, rtc: store.rtc) }
     }
 }
 
