@@ -15,6 +15,12 @@ final class AppTests: XCTestCase {
         XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: 0.151), .fair(roundTripMilliseconds: 151))
         XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: 0.301), .highLatency(roundTripMilliseconds: 301))
     }
+    func testSupportDiagnosticsReduceErrorsToSafeCategories() {
+        XCTAssertEqual(SupportDiagnostics.safeErrorCategory(nil), "none")
+        XCTAssertEqual(SupportDiagnostics.safeErrorCategory("Accessibility permission denied for alice@example.com"), "permission")
+        XCTAssertEqual(SupportDiagnostics.safeErrorCategory("Bearer secret-token connection failed"), "network")
+        XCTAssertEqual(SupportDiagnostics.safeErrorCategory("Unexpected opaque error with private details"), "other (details omitted)")
+    }
     func testPrivateTokensRequireHTTPSOutsideLoopback() throws {
         XCTAssertThrowsError(try APIClient(server: "http://192.168.1.1:8080"))
         XCTAssertThrowsError(try APIClient(server: "https://user:secret@example.com"))

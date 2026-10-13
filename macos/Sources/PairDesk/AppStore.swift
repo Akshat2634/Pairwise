@@ -21,6 +21,9 @@ final class AppStore: ObservableObject {
     @Published var startCallsMuted = UserDefaults.standard.bool(forKey: "startCallsMuted") {
         didSet { UserDefaults.standard.set(startCallsMuted, forKey: "startCallsMuted") }
     }
+    @Published var playCallSounds = (UserDefaults.standard.object(forKey: "playCallSounds") as? Bool) ?? true {
+        didSet { UserDefaults.standard.set(playCallSounds, forKey: "playCallSounds") }
+    }
     let rtc = RTCService()
     let transcripts = WhisperTranscriber()
     private var subscriptions = Set<AnyCancellable>()
@@ -199,7 +202,7 @@ final class AppStore: ObservableObject {
             callInvitations = response.calls
             observedCallStatuses = Dictionary(uniqueKeysWithValues: response.calls.map { ($0.id, $0.status) })
             if let incoming = incomingCall, oldStatuses[incoming.id] == nil {
-                NSSound(named: NSSound.Name("Glass"))?.play()
+                if playCallSounds { NSSound(named: NSSound.Name("Glass"))?.play() }
                 attentionRequest = NSApp.requestUserAttention(.criticalRequest)
             }
             if incomingCall == nil, let attentionRequest {
@@ -339,7 +342,7 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func leave() async {
+    func leave(playSound: Bool = false) async {
         transcripts.setEnabled(false)
         transcripts.clear()
         hadRemoteParticipant = false
@@ -349,6 +352,7 @@ final class AppStore: ObservableObject {
         screenClaimRoomID = nil
         await rtc.disconnect()
         if let room { try? await api.send("v1/rooms/\(room.id)/leave", body: EmptyBody()) }
+        if room != nil, playSound, playCallSounds { NSSound(named: NSSound.Name("Pop"))?.play() }
     }
 
     func shareScreen() async {
