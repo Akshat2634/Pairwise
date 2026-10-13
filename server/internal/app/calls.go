@@ -416,6 +416,14 @@ func roomSeatCountLocked(state State, roomID string, now time.Time) int {
 			count++
 		}
 	}
+	// Pending join requests reserve call capacity just like pending direct-call
+	// invitations. Without counting these seats, several simultaneous requests
+	// can all be accepted after the room has already reached its four-person cap.
+	for _, request := range state.JoinRequests {
+		if request.RoomID == roomID && request.Status == "pending" && now.Before(request.ExpiresAt) {
+			count++
+		}
+	}
 	return count
 }
 func (s *Server) userOnlineLocked(id string, now time.Time) bool {
