@@ -11,7 +11,11 @@ final class AppStore: ObservableObject {
     @Published var adminUsers: [TeamUser] = []
     @Published var rooms: [PairRoom] = []
     @Published var callInvitations: [CallInvitation] = []
-    @Published var callMessage: String?
+    /// One-line call status ("Harshit accepted your call."). Clears itself
+    /// after a few seconds and on every new call; it used to outlive the call
+    /// it described and show up during the next one.
+    @Published var callMessage: String? { didSet { scheduleCallMessageExpiry() } }
+    private var callMessageExpiry: Task<Void, Never>?
     @Published var activeRoom: PairRoom?
     @Published var callStartedAt: Date?
     @Published var busy = false
@@ -320,6 +324,7 @@ final class AppStore: ObservableObject {
 
     private func joinInternal(_ room: PairRoom) async {
         error = nil
+        callMessage = nil
         generation += 1
         let attempt = generation
         await leave()
@@ -339,6 +344,16 @@ final class AppStore: ObservableObject {
             await rtc.disconnect()
             try? await api.send("v1/rooms/\(room.id)/leave", body: EmptyBody())
             self.error = error.localizedDescription
+        }
+    }
+
+    private func scheduleCallMessageExpiry() {
+        callMessageExpiry?.cancel()
+        guard callMessage != nil else { return }
+        callMessageExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            self?.callMessage = nil
         }
     }
 

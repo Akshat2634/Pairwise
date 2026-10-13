@@ -210,7 +210,7 @@ struct ScreenSharePickerView: View {
                 Button("Set up remote control") { screenPermission.requestAccessibility() }
             }
             Spacer()
-            HStack { Button("Permissions") { permissions = true }; Spacer(); Button("Cancel") { dismiss() }; Button("Choose display…") { beginSharing() }.buttonStyle(.borderedProminent).disabled(store.busy) }
+            HStack { Button("Permissions") { permissions = true }; Spacer(); Button("Cancel") { dismiss(); AppWindows.shared.close("share") }; Button("Choose display…") { beginSharing() }.buttonStyle(.borderedProminent).disabled(store.busy) }
         }.padding(26).frame(width: 560)
         .task { screenPermission.refresh() }
         .sheet(isPresented: $permissions) { PermissionsView() }
@@ -218,6 +218,7 @@ struct ScreenSharePickerView: View {
 
     private func beginSharing() {
         dismiss()
+        AppWindows.shared.close("share")
         Task { await store.shareScreen() }
     }
 }
@@ -226,7 +227,7 @@ struct WorkspaceView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var rtc: RTCService
     @ObservedObject var transcripts: WhisperTranscriber
-    @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject private var loginItem: LoginItemManager
     var body: some View {
         VStack(spacing: 20) {
             Image(systemName: "rectangle.on.rectangle").font(.system(size: 46))
@@ -234,7 +235,7 @@ struct WorkspaceView: View {
             Text("Click its icon at the top right of your screen to call a teammate, share a display, or manage a call.").multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 440)
             // Their own windows, as in the menu bar: these are taller than this
             // compact window, so sheets would hang off its bottom edge.
-            HStack { Button("Permissions") { PermissionWindowController.shared.show() }; Button("Account settings") { openWindow(id: "account") } }
+            HStack { Button("Permissions") { PermissionWindowController.shared.show() }; Button("Account settings") { AppWindows.shared.showAccount(store: store, loginItem: loginItem) } }
         }.padding(40).frame(width: 520)
     }
 }
@@ -279,7 +280,6 @@ private struct TranscriptPanel: View {
 struct AccountView: View {
     @EnvironmentObject private var loginItem: LoginItemManager
     @ObservedObject var store: AppStore
-    @Environment(\.dismiss) private var dismiss
     @State private var current = ""
     @State private var newPassword = ""
     @State private var confirmation = ""
@@ -305,12 +305,13 @@ struct AccountView: View {
             SecureField("Current password", text: $current).textFieldStyle(.roundedBorder)
             SecureField("New password (at least 12 characters)", text: $newPassword).textFieldStyle(.roundedBorder)
             SecureField("Confirm new password", text: $confirmation).textFieldStyle(.roundedBorder)
-            HStack { Button("Sign out") { dismiss(); Task { await store.logout() } }.disabled(store.busy || saving); Spacer(); Button("Close") { dismiss() }; Button(saving ? "Saving…" : "Save password") { saving = true; Task { let success = await store.changePassword(current: current, new: newPassword); saving = false; if success { dismiss() } } }.buttonStyle(.borderedProminent).disabled(saving || current.isEmpty || newPassword.count < 12 || newPassword != confirmation) }
+            HStack { Button("Sign out") { closeWindow(); Task { await store.logout() } }.disabled(store.busy || saving); Spacer(); Button("Close") { closeWindow() }; Button(saving ? "Saving…" : "Save password") { saving = true; Task { let success = await store.changePassword(current: current, new: newPassword); saving = false; if success { closeWindow() } } }.buttonStyle(.borderedProminent).disabled(saving || current.isEmpty || newPassword.count < 12 || newPassword != confirmation) }
         }.padding(30).frame(width: 430)
             .sheet(isPresented: $addingMember) { CreateMemberView(store: store) }
             .sheet(isPresented: $managingTeam) { ManageTeamView(store: store) }
             .sheet(isPresented: $showingDiagnostics) { SupportDiagnosticsView(store: store, rtc: store.rtc) }
     }
+    private func closeWindow() { AppWindows.shared.close("account") }
 }
 
 private struct ManageTeamView: View {
