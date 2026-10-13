@@ -114,19 +114,25 @@ struct SharedScreenWindow: View {
                         InteractiveScreenView(track: track, rtc: rtc)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .overlay {
-                                if !rtc.usesIndependentCursors, let dimensions = track.dimensions {
+                                if let dimensions = track.dimensions {
                                     GeometryReader { geometry in
                                         let contentSize = CGSize(width: Int(dimensions.width), height: Int(dimensions.height))
-                                        ForEach(rtc.remotePointers) { pointer in
-                                            if let point = ScreenCoordinateMapper.displayedPoint(
-                                                normalized: CGPoint(x: pointer.x, y: pointer.y),
-                                                container: CGRect(origin: .zero, size: geometry.size),
-                                                contentSize: contentSize
-                                            ) {
-                                                RemotePointerBadge(name: rtc.participantName(for: pointer.id), color: cursorColor(for: pointer.id))
-                                                    .position(x: min(max(point.x + 54, 54), geometry.size.width - 54),
-                                                              y: min(max(point.y + 14, 14), geometry.size.height - 14))
-                                                    .transition(.opacity)
+                                        if rtc.usesIndependentCursors {
+                                            let pointers = rtc.remotePointers + localPointer
+                                            let names = Dictionary(uniqueKeysWithValues: rtc.participants.map { ($0.identity, $0.name) })
+                                            SharedCursorLayer(pointers: pointers, names: names, contentSize: contentSize)
+                                        } else {
+                                            ForEach(rtc.remotePointers) { pointer in
+                                                if let point = ScreenCoordinateMapper.displayedPoint(
+                                                    normalized: CGPoint(x: pointer.x, y: pointer.y),
+                                                    container: CGRect(origin: .zero, size: geometry.size),
+                                                    contentSize: contentSize
+                                                ) {
+                                                    RemotePointerBadge(name: rtc.participantName(for: pointer.id), color: cursorColor(for: pointer.id))
+                                                        .position(x: min(max(point.x + 54, 54), geometry.size.width - 54),
+                                                                  y: min(max(point.y + 14, 14), geometry.size.height - 14))
+                                                        .transition(.opacity)
+                                                }
                                             }
                                         }
                                     }
@@ -157,6 +163,11 @@ struct SharedScreenWindow: View {
     }
 
     private func cursorColor(for identity: String) -> Color { Theme.personColor(for: identity) }
+
+    private var localPointer: [RemotePointer] {
+        guard let identity = rtc.localIdentity, let point = rtc.localCursorPosition else { return [] }
+        return [RemotePointer(id: identity, x: point.x, y: point.y, updatedAt: .now)]
+    }
 
     private var networkQualityColor: Color {
         switch rtc.screenNetworkQuality {

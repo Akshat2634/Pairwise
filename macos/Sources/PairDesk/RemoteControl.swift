@@ -28,7 +28,7 @@ extension RemoteControlState {
 /// encoded: the receiver must use LiveKit's authenticated participant identity.
 struct RemoteControlMessage: Codable, Equatable {
     /// Unknown kinds are ignored by older clients.
-    enum Kind: String, Codable { case request, grant, revoke, hostPermissionRequired, release, heartbeat, pointer, key, button, scroll, releaseAll, availability, cursor }
+    enum Kind: String, Codable { case request, grant, revoke, hostPermissionRequired, release, heartbeat, pointer, key, button, scroll, releaseAll, availability, cursor, cursorBroadcast }
     var version: Int = 1
     var epoch: String
     var sequence: UInt64
@@ -46,6 +46,8 @@ struct RemoteControlMessage: Codable, Equatable {
     var reason: String?
     /// Display shares advertise an epoch for independent, non-controlling cursors.
     var cursorSession: String?
+    /// `.cursorBroadcast` only: identity of the participant whose pointer is relayed.
+    var pointerIdentity: String?
     var visible: Bool?
 }
 
@@ -96,10 +98,19 @@ enum IndependentCursorPolicy {
         return x.isFinite && y.isFinite && (0...1).contains(x) && (0...1).contains(y)
     }
 
-    /// Core Graphics uses top-left coordinates; AppKit uses bottom-left.
-    static func appKitFrame(for bounds: CGRect, primaryScreenTop: CGFloat) -> CGRect {
-        CGRect(x: bounds.minX, y: primaryScreenTop - bounds.maxY, width: bounds.width, height: bounds.height)
+    static func acceptsBroadcast(_ message: RemoteControlMessage, session: String?, senderIsSharer: Bool,
+                                 pointerIsParticipant: Bool, viewerIdentity: String?, lastSequence: UInt64?) -> Bool {
+        guard senderIsSharer, pointerIsParticipant, message.version == 1,
+              message.kind == .cursorBroadcast,
+              let pointerIdentity = message.pointerIdentity, !pointerIdentity.isEmpty,
+              pointerIdentity != viewerIdentity,
+              let session, !session.isEmpty, message.epoch == session,
+              message.sequence > (lastSequence ?? 0) else { return false }
+        if message.visible == false { return true }
+        guard let x = message.x, let y = message.y else { return false }
+        return x.isFinite && y.isFinite && (0...1).contains(x) && (0...1).contains(y)
     }
+
 }
 
 /// First eligible requester owns the current lease; later requesters wait in
