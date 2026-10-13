@@ -45,17 +45,27 @@ public class MacOSScreenCapturer: VideoCapturer, @unchecked Sendable {
     struct State {
         // SCStream
         var scStream: SCStream?
+        var outputDimensions: Dimensions
+        var outputFPS: Int
+        var streamWidth = 0
+        var streamHeight = 0
         // Cached frame for resending to maintain minimum of 1 fps
         var lastFrame: LKRTCVideoFrame?
         var resendTimer: AnyTaskCancellable?
+
+        init(dimensions: Dimensions, fps: Int) {
+            outputDimensions = dimensions
+            outputFPS = fps
+        }
     }
 
-    private var _screenCapturerState = StateSync(State())
+    private var _screenCapturerState: StateSync<State>
 
     init(delegate: LKRTCVideoCapturerDelegate, captureSource: MacOSScreenCaptureSource, options: ScreenShareCaptureOptions) {
         self.captureSource = captureSource
         suppliedContentFilter = nil
         self.options = options
+        _screenCapturerState = StateSync(State(dimensions: options.dimensions, fps: options.fps))
         super.init(delegate: delegate)
     }
 
@@ -64,6 +74,7 @@ public class MacOSScreenCapturer: VideoCapturer, @unchecked Sendable {
         captureSource = nil
         suppliedContentFilter = contentFilter
         self.options = options
+        _screenCapturerState = StateSync(State(dimensions: options.dimensions, fps: options.fps))
         super.init(delegate: delegate)
     }
 
@@ -96,28 +107,7 @@ public class MacOSScreenCapturer: VideoCapturer, @unchecked Sendable {
             throw LiveKitError(.invalidState, message: "Unable to resolve SCContentFilter")
         }
 
-        let configuration = SCStreamConfiguration()
-
-        let mainDisplay = CGMainDisplayID()
-        // try to capture in max resolution
-        #if compiler(>=6.4)
-        LKObjCHelpers.setWidth(CGDisplayPixelsWide(mainDisplay) * 2,
-                               height: CGDisplayPixelsHigh(mainDisplay) * 2,
-                               on: configuration)
-        #else
-        configuration.width = CGDisplayPixelsWide(mainDisplay) * 2
-        configuration.height = CGDisplayPixelsHigh(mainDisplay) * 2
-        #endif
-
-        configuration.scalesToFit = false
-        configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(options.fps))
-        configuration.queueDepth = 5
-        configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-        configuration.showsCursor = options.showCursor
-
-        if #available(macOS 13.0, *) {
-            configuration.capturesAudio = options.appAudio
-        }
+        let configuration = streamConfiguration(filter: filter, fps: options.fps)
 
         // Why does SCStream hold strong reference to delegate?
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
@@ -127,7 +117,11 @@ public class MacOSScreenCapturer: VideoCapturer, @unchecked Sendable {
         }
         try await stream.startCapture()
 
-        _screenCapturerState.mutate { $0.scStream = stream }
+        _screenCapturerState.mutate {
+            $0.scStream = stream
+            $0.streamWidth = configuration.width
+            $0.streamHeight = configuration.height
+        }
 
         return true
     }
@@ -157,6 +151,52 @@ public class MacOSScreenCapturer: VideoCapturer, @unchecked Sendable {
         return true
     }
 
+    /// Adjusts the live screen stream without unpublishing it. The source crop
+    /// remains fixed for this share; only output size and frame cadence change.
+    public func updateScreenShareSettings(dimensions: Dimensions, fps: Int) async throws {
+        guard dimensions.width > 0, dimensions.height > 0, (1...30).contains(fps),
+              let stream = _screenCapturerState.read({ $0.scStream }) else {
+            throw LiveKitError(.invalidState, message: "Screen-share capture is not running or settings are invalid.")
+        }
+        let size = _screenCapturerState.read { ($0.streamWidth, $0.streamHeight) }
+        let configuration = streamConfiguration(width: size.0, height: size.1, fps: fps)
+        try await stream.updateConfiguration(configuration)
+        _screenCapturerState.mutate {
+            $0.outputDimensions = dimensions
+            $0.outputFPS = fps
+        }
+    }
+
+    private func streamConfiguration(filter: SCContentFilter, fps: Int) -> SCStreamConfiguration {
+        let displayID: CGDirectDisplayID
+        if #available(macOS 15.2, *) {
+            displayID = filter.includedDisplays.first?.displayID ?? CGMainDisplayID()
+        } else {
+            displayID = CGMainDisplayID()
+        }
+        return streamConfiguration(width: Int(CGDisplayPixelsWide(displayID) * 2),
+                                   height: Int(CGDisplayPixelsHigh(displayID) * 2),
+                                   fps: fps)
+    }
+
+    private func streamConfiguration(width: Int, height: Int, fps: Int) -> SCStreamConfiguration {
+        let configuration = SCStreamConfiguration()
+        #if compiler(>=6.4)
+        LKObjCHelpers.setWidth(width, height: height, on: configuration)
+        #else
+        configuration.width = width
+        configuration.height = height
+        #endif
+        configuration.scalesToFit = false
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
+        configuration.queueDepth = 5
+        configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        configuration.showsCursor = options.showCursor
+        if !options.sourceRect.isEmpty { configuration.sourceRect = options.sourceRect }
+        if #available(macOS 13.0, *) { configuration.capturesAudio = options.appAudio }
+        return configuration
+    }
+
     // Common capture func
     private func capture(_ sampleBuffer: CMSampleBuffer, contentRect: CGRect, scaleFactor: CGFloat = 1.0) {
         // Get the pixel buffer that contains the image data.
@@ -168,8 +208,9 @@ public class MacOSScreenCapturer: VideoCapturer, @unchecked Sendable {
         let sourceDimensions = Dimensions(width: Int32((contentRect.width * scaleFactor).rounded(.down)),
                                           height: Int32((contentRect.height * scaleFactor).rounded(.down)))
 
+        let outputDimensions = _screenCapturerState.read(\.outputDimensions)
         let targetDimensions = sourceDimensions
-            .aspectFit(size: options.dimensions.max)
+            .aspectFit(size: outputDimensions.max)
             .toEncodeSafeDimensions()
 
         let rtcPixelBuffer = LKRTCCVPixelBuffer(pixelBuffer: pixelBuffer,

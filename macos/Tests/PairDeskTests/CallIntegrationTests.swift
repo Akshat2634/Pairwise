@@ -48,6 +48,23 @@ final class CallIntegrationTests: XCTestCase {
             await fulfillment(of: [receiver.expectation], timeout: 10)
             XCTAssertEqual(receiver.received, payload)
             XCTAssertEqual(receiver.sender, media[0].localParticipant.identity?.stringValue)
+            let hostIdentity = try XCTUnwrap(media[0].localParticipant.identity)
+            let clipboardExpectation = expectation(description: "Text clipboard message delivered to intended Mac")
+            let clipboardReceiver = DataReceiver(expectation: clipboardExpectation, topic: "pairdesk.clipboard.v1")
+            media[0].add(delegate: clipboardReceiver)
+            let clipboard = try ClipboardTransferMessage(recipientIdentity: hostIdentity.stringValue,
+                                                         text: "clipboard integration · 你好")
+            try await media[1].localParticipant.publish(
+                data: clipboard.encoded(),
+                options: DataPublishOptions(destinationIdentities: [hostIdentity],
+                                            topic: "pairdesk.clipboard.v1", reliable: true)
+            )
+            await fulfillment(of: [clipboardExpectation], timeout: 10)
+            XCTAssertEqual(clipboardReceiver.sender, media[1].localParticipant.identity?.stringValue)
+            XCTAssertEqual(try ClipboardTransferMessage.decode(try XCTUnwrap(clipboardReceiver.received),
+                                                               authenticatedSender: try XCTUnwrap(clipboardReceiver.sender),
+                                                               localIdentity: hostIdentity.stringValue), clipboard)
+            media[0].remove(delegate: clipboardReceiver)
             // Independent hover uses an authenticated, lossy packet addressed
             // only to the sharing Mac, without any control lease.
             let cursorReceiver = DataReceiver(expectation: expectation(description: "Independent cursor delivered to host"), topic: "pairdesk.control.v1")
@@ -65,6 +82,22 @@ final class CallIntegrationTests: XCTestCase {
             XCTAssertEqual(receivedCursor, cursor)
             XCTAssertEqual(cursorReceiver.sender, media[1].localParticipant.identity?.stringValue)
             XCTAssertTrue(IndependentCursorPolicy.accepts(receivedCursor, session: "fixture-share", isParticipant: true, lastSequence: nil))
+            let motionExpectation = expectation(description: "Coalesced control motion delivered independently of ordered inputs")
+            let motionReceiver = DataReceiver(expectation: motionExpectation, topic: "pairdesk.control.v1")
+            media[0].add(delegate: motionReceiver)
+            let motion = RemoteControlMessage(epoch: "fixture-share", sequence: 1,
+                                              kind: .pointer, x: 0.4, y: 0.6)
+            try await media[1].localParticipant.publish(data: JSONEncoder().encode(motion),
+                                                        options: DataPublishOptions(destinationIdentities: [hostID],
+                                                                                    topic: "pairdesk.control.v1", reliable: false))
+            await fulfillment(of: [motionExpectation], timeout: 5)
+            let receivedMotion = try JSONDecoder().decode(RemoteControlMessage.self, from: XCTUnwrap(motionReceiver.received))
+            XCTAssertEqual(receivedMotion, motion)
+            let viewerIdentity = try XCTUnwrap(motionReceiver.sender)
+            var motionGate = RemoteControlGate()
+            motionGate.grant(identity: viewerIdentity, epoch: "fixture-share", now: 1_000)
+            XCTAssertTrue(motionGate.accept(receivedMotion, sender: viewerIdentity, now: 1_000.1))
+            media[0].remove(delegate: motionReceiver)
             let relayed = RemoteControlMessage(epoch: "fixture-share", sequence: 2, kind: .cursorBroadcast,
                                                x: 0.25, y: 0.75, pointerIdentity: viewerID, visible: true)
             try await media[0].localParticipant.publish(data: JSONEncoder().encode(relayed), options: DataPublishOptions(destinationIdentities: [bystanderID], topic: "pairdesk.control.v1", reliable: false))

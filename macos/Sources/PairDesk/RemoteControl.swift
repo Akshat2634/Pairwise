@@ -28,7 +28,7 @@ extension RemoteControlState {
 /// encoded: the receiver must use LiveKit's authenticated participant identity.
 struct RemoteControlMessage: Codable, Equatable {
     /// Unknown kinds are ignored by older clients.
-    enum Kind: String, Codable { case request, grant, revoke, hostPermissionRequired, release, heartbeat, pointer, key, button, scroll, releaseAll, availability, cursor, cursorBroadcast }
+    enum Kind: String, Codable { case request, grant, revoke, hostPermissionRequired, release, heartbeat, pointer, key, button, scroll, releaseAll, availability, cursor, cursorBroadcast, qualityFeedback }
     var version: Int = 1
     var epoch: String
     var sequence: UInt64
@@ -49,6 +49,8 @@ struct RemoteControlMessage: Codable, Equatable {
     /// `.cursorBroadcast` only: identity of the participant whose pointer is relayed.
     var pointerIdentity: String?
     var visible: Bool?
+    var packetLossPercent: Double?
+    var roundTripMilliseconds: Int?
 }
 
 enum RemoteControlUnavailableReason: String, Codable, Equatable {

@@ -73,4 +73,51 @@ final class ScreenShareQualityTests: XCTestCase {
         XCTAssertNil(ScreenNetworkQuality.selectedRoundTripTimeSeconds(selectedPairID: "candidate-b", pairs: pairs))
         XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: nil), .measuring)
     }
+
+    func testAdaptiveQualityOnlyReducesBelowTheSelectedMaximumAndRecoversWithHysteresis() {
+        var controller = AdaptiveShareController(maximum: .sharp)
+        XCTAssertEqual(controller.current, .fourK)
+        XCTAssertNil(controller.observe(.init(availableOutgoingBitrate: nil, bandwidthLimited: false, cpuLimited: false)))
+
+        let constrained = AdaptiveShareSignal(availableOutgoingBitrate: 2_000_000, bandwidthLimited: true, cpuLimited: false)
+        XCTAssertNil(controller.observe(constrained))
+        XCTAssertNil(controller.observe(constrained))
+        XCTAssertEqual(controller.observe(constrained), .q1440)
+        XCTAssertEqual(controller.current.dimensions.width, 2_560)
+        XCTAssertEqual(controller.current.fps, 30)
+
+        let healthy = AdaptiveShareSignal(availableOutgoingBitrate: 12_000_000, bandwidthLimited: false, cpuLimited: false,
+                                         receiversHealthy: true)
+        for _ in 0..<7 { XCTAssertNil(controller.observe(healthy)) }
+        XCTAssertEqual(controller.observe(healthy), .fourK)
+        XCTAssertEqual(controller.current.dimensions.width, 3_840)
+        XCTAssertEqual(controller.current.fps, 30)
+    }
+
+    func testRecoveryNeedsHeadroomAboveTheHigherTiersStepDownBand() {
+        var controller = AdaptiveShareController(maximum: .sharp)
+        let constrained = AdaptiveShareSignal(availableOutgoingBitrate: 2_000_000, bandwidthLimited: true, cpuLimited: false)
+        for _ in 0..<2 { XCTAssertNil(controller.observe(constrained)) }
+        XCTAssertEqual(controller.observe(constrained), .q1440)
+
+        // 8.5 Mbps clears 1440p's own budget but sits inside 4K's step-down band
+        // (below 8 Mbps × 1.15), so it must not count as recovery.
+        let marginal = AdaptiveShareSignal(availableOutgoingBitrate: 8_500_000, bandwidthLimited: false, cpuLimited: false,
+                                          receiversHealthy: true)
+        for _ in 0..<12 { XCTAssertNil(controller.observe(marginal)) }
+        XCTAssertEqual(controller.current, .q1440)
+
+        let roomy = AdaptiveShareSignal(availableOutgoingBitrate: 10_500_000, bandwidthLimited: false, cpuLimited: false,
+                                       receiversHealthy: true)
+        for _ in 0..<7 { XCTAssertNil(controller.observe(roomy)) }
+        XCTAssertEqual(controller.observe(roomy), .fourK)
+        XCTAssertNil(controller.observe(roomy), "10.5 Mbps is above 4K's step-down threshold, so it stays")
+    }
+
+    func testAdaptiveQualityHonorsLowerMaximumAndNeverExceedsFourK30() {
+        let balanced = AdaptiveShareController(maximum: .balanced)
+        XCTAssertEqual(balanced.current, .q1440)
+        XCTAssertFalse(AdaptiveShareTier.tiers(maximum: .fast).contains(.fourK))
+        XCTAssertTrue(AdaptiveShareTier.allCases.allSatisfy { $0.fps <= 30 && $0.dimensions.width <= 3_840 })
+    }
 }

@@ -15,6 +15,7 @@
  */
 
 import Foundation
+import CoreGraphics
 
 @objcMembers
 public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sendable {
@@ -38,6 +39,10 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
     /// Exclude windows by their window ID (macOS only).
     public let excludeWindowIDs: [UInt32]
 
+    /// Display-local source rectangle for region sharing on macOS. `.zero`
+    /// preserves the existing full-display behavior.
+    public let sourceRect: CGRect
+
     public static let defaultToBroadcastExtension: Bool = {
         #if os(iOS)
         return BroadcastBundleInfo.hasExtension
@@ -52,7 +57,8 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
                 appAudio: Bool = false,
                 useBroadcastExtension: Bool = defaultToBroadcastExtension,
                 includeCurrentApplication: Bool = false,
-                excludeWindowIDs: [UInt32] = [])
+                excludeWindowIDs: [UInt32] = [],
+                sourceRect: CGRect = .zero)
     {
         self.dimensions = dimensions
         self.fps = fps
@@ -61,6 +67,7 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
         self.useBroadcastExtension = useBroadcastExtension
         self.includeCurrentApplication = includeCurrentApplication
         self.excludeWindowIDs = excludeWindowIDs
+        self.sourceRect = sourceRect
     }
 
     // MARK: - Equal
@@ -73,7 +80,8 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
             appAudio == other.appAudio &&
             useBroadcastExtension == other.useBroadcastExtension &&
             includeCurrentApplication == other.includeCurrentApplication &&
-            excludeWindowIDs == other.excludeWindowIDs
+            excludeWindowIDs == other.excludeWindowIDs &&
+            sourceRect == other.sourceRect
     }
 
     override public var hash: Int {
@@ -85,6 +93,10 @@ public final class ScreenShareCaptureOptions: NSObject, VideoCaptureOptions, Sen
         hasher.combine(useBroadcastExtension)
         hasher.combine(includeCurrentApplication)
         hasher.combine(excludeWindowIDs)
+        hasher.combine(sourceRect.origin.x)
+        hasher.combine(sourceRect.origin.y)
+        hasher.combine(sourceRect.size.width)
+        hasher.combine(sourceRect.size.height)
         return hasher.finalize()
     }
 }

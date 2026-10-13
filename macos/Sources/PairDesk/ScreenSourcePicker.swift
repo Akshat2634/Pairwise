@@ -1,12 +1,141 @@
 import Foundation
+import AppKit
 import ScreenCaptureKit
+import SwiftUI
+
+enum ScreenCropGeometry {
+    static func normalizedCrop(dragRect: CGRect, contentRect: CGRect) -> CGRect? {
+        guard contentRect.width > 0, contentRect.height > 0 else { return nil }
+        let clipped = dragRect.standardized.intersection(contentRect)
+        guard !clipped.isNull, clipped.width >= 24, clipped.height >= 24 else { return nil }
+        return CGRect(x: (clipped.minX - contentRect.minX) / contentRect.width,
+                      y: (clipped.minY - contentRect.minY) / contentRect.height,
+                      width: clipped.width / contentRect.width,
+                      height: clipped.height / contentRect.height)
+    }
+
+    static func sourceRect(normalizedCrop: CGRect, displaySize: CGSize) -> CGRect? {
+        guard displaySize.width > 0, displaySize.height > 0,
+              normalizedCrop.minX >= 0, normalizedCrop.minY >= 0,
+              normalizedCrop.maxX <= 1, normalizedCrop.maxY <= 1,
+              normalizedCrop.width > 0, normalizedCrop.height > 0 else { return nil }
+        return CGRect(x: normalizedCrop.minX * displaySize.width,
+                      y: normalizedCrop.minY * displaySize.height,
+                      width: normalizedCrop.width * displaySize.width,
+                      height: normalizedCrop.height * displaySize.height)
+    }
+}
+
+private struct ScreenCropSelectionView: View {
+    let image: NSImage
+    let onCancel: () -> Void
+    let onShare: (CGRect?) -> Void
+    @State private var dragStart: CGPoint?
+    @State private var dragCurrent: CGPoint?
+    @State private var normalizedSelection: CGRect?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Select the part of your screen to share")
+                .font(.headline)
+            Text("Drag over the code or app you want to show. The rest of your screen stays private.")
+                .font(.caption).foregroundStyle(.secondary)
+            GeometryReader { geometry in
+                let content = ScreenCoordinateMapper.contentRect(
+                    container: CGRect(origin: .zero, size: geometry.size),
+                    contentSize: image.size
+                ) ?? CGRect(origin: .zero, size: geometry.size)
+                ZStack {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Canvas { context, _ in
+                        let selection = visibleSelection(in: content)
+                        if let selection {
+                            context.fill(Path(selection), with: .color(.white.opacity(0.12)))
+                            context.stroke(Path(selection), with: .color(.white), lineWidth: 2)
+                            context.stroke(Path(selection.insetBy(dx: 1, dy: 1)), with: .color(.black.opacity(0.7)), lineWidth: 1)
+                        }
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .local)
+                    .onChanged { value in
+                        if dragStart == nil { dragStart = value.startLocation }
+                        dragCurrent = value.location
+                    }
+                    .onEnded { value in
+                        let start = dragStart ?? value.startLocation
+                        let drag = CGRect(x: min(start.x, value.location.x),
+                                          y: min(start.y, value.location.y),
+                                          width: abs(value.location.x - start.x),
+                                          height: abs(value.location.y - start.y))
+                        normalizedSelection = ScreenCropGeometry.normalizedCrop(dragRect: drag, contentRect: content)
+                        dragStart = nil
+                        dragCurrent = nil
+                    })
+                .onChange(of: geometry.size) { _, _ in normalizedSelection = nil }
+            }
+            .frame(minHeight: 330)
+            HStack {
+                Spacer()
+                Button("Share entire display") { onShare(nil) }.buttonStyle(QuietButtonStyle())
+                Button("Cancel", action: onCancel).buttonStyle(QuietButtonStyle()).keyboardShortcut(.cancelAction)
+                Button("Share selected region") {
+                    if let normalizedSelection { onShare(normalizedSelection) }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .keyboardShortcut(.defaultAction)
+                .disabled(normalizedSelection == nil)
+            }
+        }
+        .padding(18)
+        .frame(width: 820, height: 600)
+        .background(Theme.surface)
+        .preferredColorScheme(.dark)
+    }
+
+    private func visibleSelection(in content: CGRect) -> CGRect? {
+        if let normalizedSelection {
+            return CGRect(x: content.minX + normalizedSelection.minX * content.width,
+                          y: content.minY + normalizedSelection.minY * content.height,
+                          width: normalizedSelection.width * content.width,
+                          height: normalizedSelection.height * content.height)
+        }
+        guard let start = dragStart, let current = dragCurrent else { return nil }
+        return CGRect(x: min(start.x, current.x), y: min(start.y, current.y),
+                      width: abs(current.x - start.x), height: abs(current.y - start.y))
+    }
+}
 
 /// Uses Apple's native picker and limits capture access to one user-selected display or window.
 @available(macOS 14.0, *)
 @MainActor
-final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPickerObserver {
+final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPickerObserver, NSWindowDelegate {
     static let shared = SystemScreenPicker()
     private var continuation: CheckedContinuation<SCContentFilter, Error>?
+    private var cropContinuation: CheckedContinuation<CGRect?, Error>?
+    private var cropWindow: NSWindow?
+
+    func chooseSource() async throws -> (filter: SCContentFilter, sourceRect: CGRect) {
+        let filter = try await chooseDisplay()
+        guard filter.style != .window else {
+            return (filter, .zero)
+        }
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(1, Int(filter.contentRect.width * 2))
+        configuration.height = max(1, Int(filter.contentRect.height * 2))
+        configuration.showsCursor = false
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        let normalized = try await chooseCrop(for: NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)))
+        guard let normalized else { return (filter, .zero) }
+        let displaySize = CGSize(width: filter.contentRect.width, height: filter.contentRect.height)
+        guard let sourceRect = ScreenCropGeometry.sourceRect(normalizedCrop: normalized, displaySize: displaySize) else {
+            throw CocoaError(.validationMissingMandatoryProperty)
+        }
+        return (filter, sourceRect)
+    }
 
     func chooseDisplay() async throws -> SCContentFilter {
         try await withCheckedThrowingContinuation { continuation in
@@ -31,6 +160,50 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
 
     func contentSharingPickerStartDidFailWithError(_ error: Error) {
         finish(.failure(error), picker: .shared)
+    }
+
+    private func chooseCrop(for image: NSImage) async throws -> CGRect? {
+        try await withCheckedThrowingContinuation { continuation in
+            cropContinuation = continuation
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 600),
+                                  styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "PairDesk · Share a region"
+            window.isReleasedWhenClosed = false
+            window.standardWindowButton(.zoomButton)?.isHidden = true
+            window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+            // Resume before closing: closing also reaches windowWillClose, which
+            // must only act when the person dismissed the window with its close button.
+            window.contentViewController = NSHostingController(rootView: ScreenCropSelectionView(
+                image: image,
+                onCancel: { [weak self, weak window] in
+                    self?.finishCrop(.failure(CocoaError(.userCancelled)))
+                    window?.close()
+                },
+                onShare: { [weak self, weak window] crop in
+                    self?.finishCrop(.success(crop))
+                    window?.close()
+                }
+            ))
+            window.delegate = self
+            cropWindow = window
+            NSApp.activate(ignoringOtherApps: true)
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func finishCrop(_ result: Result<CGRect?, Error>) {
+        let continuation = cropContinuation
+        cropContinuation = nil
+        cropWindow = nil
+        continuation?.resume(with: result)
+    }
+
+    /// The red close button is a cancel; without this the picker's caller
+    /// would wait forever and the app would stay busy.
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === cropWindow else { return }
+        finishCrop(.failure(CocoaError(.userCancelled)))
     }
 
     private func finish(_ result: Result<SCContentFilter, Error>, picker: SCContentSharingPicker) {

@@ -443,10 +443,10 @@ final class AppStore: ObservableObject {
         defer { busy = false }
         struct Body: Encodable { let enabled: Bool }
         do {
-            let filter = try await SystemScreenPicker.shared.chooseDisplay()
+            let selection = try await SystemScreenPicker.shared.chooseSource()
             try await api.send("v1/rooms/\(room.id)/share", body: Body(enabled: true))
             screenClaimRoomID = room.id
-            try await rtc.startScreenShare(contentFilter: filter)
+            try await rtc.startScreenShare(contentFilter: selection.filter, sourceRect: selection.sourceRect)
         } catch {
             try? await releaseScreenClaim()
             if (error as? CocoaError)?.code != .userCancelled { self.error = error.localizedDescription }
@@ -459,10 +459,10 @@ final class AppStore: ObservableObject {
         defer { busy = false }
         do {
             // Pick first so canceling leaves the current share untouched.
-            let filter = try await SystemScreenPicker.shared.chooseDisplay()
+            let selection = try await SystemScreenPicker.shared.chooseSource()
             await rtc.stopScreenShare()
             guard !rtc.isSharing else { throw APIError(status: 0, message: "The current screen share could not be stopped safely.") }
-            try await rtc.startScreenShare(contentFilter: filter)
+            try await rtc.startScreenShare(contentFilter: selection.filter, sourceRect: selection.sourceRect)
             screenClaimRoomID = room.id
         } catch {
             if (error as? CocoaError)?.code != .userCancelled {

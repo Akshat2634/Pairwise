@@ -103,4 +103,85 @@ final class DirectCallIntegrationTests: XCTestCase {
         for room in media { await room.disconnect() }
         if let activeRoomID { for client in clients { try? await client.send("v1/rooms/\(activeRoomID)/leave", body: EmptyBody()) } }
     }
+
+    @MainActor
+    func testTeammateCanRequestToJoinAndEitherCurrentParticipantCanAccept() async throws {
+        guard let address = ProcessInfo.processInfo.environment["PAIRDESK_TEST_API"],
+              let password = ProcessInfo.processInfo.environment["PAIRDESK_TEST_PASSWORD"] else {
+            throw XCTSkip("Run scripts/test-call.sh for group-call join-request integration")
+        }
+        struct LoginBody: Encodable { let email: String; let password: String }
+        struct CallBody: Encodable { let userId: String; let roomId: String? }
+        let unsigned = try APIClient(server: address)
+        var clients: [APIClient] = []
+        var users: [TeamUser] = []
+        var rooms: [Room] = []
+        var activeRoomID: String?
+        for i in 1...5 {
+            let login: LoginResponse = try await unsigned.post("v1/login", body: LoginBody(email: "integration-\(i)@pairdesk.invalid", password: password))
+            clients.append(try APIClient(server: address, token: login.token))
+            users.append(login.user)
+        }
+        do {
+            for client in clients { try await client.send("v1/heartbeat", body: EmptyBody()) }
+            let invitation: CallResponse = try await clients[0].post("v1/calls", body: CallBody(userId: users[1].id, roomId: nil))
+            activeRoomID = invitation.call.room.id
+            let _: CallResponse = try await clients[1].post("v1/calls/\(invitation.call.id)/accept", body: EmptyBody())
+            let firstJoin: JoinResponse = try await clients[0].post("v1/rooms/\(invitation.call.room.id)/join", body: EmptyBody())
+            let secondJoin: JoinResponse = try await clients[1].post("v1/rooms/\(invitation.call.room.id)/join", body: EmptyBody())
+            let first = Room()
+            let second = Room()
+            rooms.append(contentsOf: [first, second])
+            try await first.connect(url: firstJoin.url, token: firstJoin.token)
+            try await second.connect(url: secondJoin.url, token: secondJoin.token)
+
+            let roomID = invitation.call.room.id
+            for client in clients.prefix(2) { try await client.send("v1/rooms/\(roomID)/heartbeat", body: EmptyBody()) }
+            let requestForThird: CallJoinRequestResponse = try await clients[2].post("v1/rooms/\(roomID)/join-requests", body: EmptyBody())
+            let secondInbox: JoinRequestsResponse = try await clients[1].request("v1/join-requests")
+            XCTAssertTrue(secondInbox.requests.contains { $0.id == requestForThird.request.id && $0.status == "pending" })
+            let _: CallJoinRequestResponse = try await clients[1].post("v1/join-requests/\(requestForThird.request.id)/accept", body: EmptyBody())
+            let thirdJoin: JoinResponse = try await clients[2].post("v1/rooms/\(roomID)/join", body: EmptyBody())
+            let third = Room()
+            rooms.append(third)
+            try await third.connect(url: thirdJoin.url, token: thirdJoin.token)
+            for client in clients.prefix(3) { try await client.send("v1/rooms/\(roomID)/heartbeat", body: EmptyBody()) }
+            for client in clients { try await client.send("v1/heartbeat", body: EmptyBody()) }
+
+            let requestForFourth: CallJoinRequestResponse = try await clients[3].post("v1/rooms/\(roomID)/join-requests", body: EmptyBody())
+            let firstInbox: JoinRequestsResponse = try await clients[0].request("v1/join-requests")
+            XCTAssertTrue(firstInbox.requests.contains { $0.id == requestForFourth.request.id && $0.status == "pending" })
+            let _: CallJoinRequestResponse = try await clients[0].post("v1/join-requests/\(requestForFourth.request.id)/accept", body: EmptyBody())
+            let fourthJoin: JoinResponse = try await clients[3].post("v1/rooms/\(roomID)/join", body: EmptyBody())
+            let fourth = Room()
+            rooms.append(fourth)
+            try await fourth.connect(url: fourthJoin.url, token: fourthJoin.token)
+
+            for client in clients.prefix(4) { try await client.send("v1/rooms/\(roomID)/heartbeat", body: EmptyBody()) }
+            for client in clients { try await client.send("v1/heartbeat", body: EmptyBody()) }
+            for _ in 0..<100 {
+                if first.remoteParticipants.count == 3 { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            XCTAssertEqual(first.remoteParticipants.count, 3)
+            XCTAssertEqual(second.remoteParticipants.count, 3)
+            XCTAssertEqual(third.remoteParticipants.count, 3)
+            XCTAssertEqual(fourth.remoteParticipants.count, 3)
+
+            do {
+                let _: CallJoinRequestResponse = try await clients[4].post("v1/rooms/\(roomID)/join-requests", body: EmptyBody())
+                XCTFail("A fifth teammate created a join request for a full call")
+            } catch let error as APIError { XCTAssertEqual(error.status, 409) }
+        } catch {
+            for room in rooms { await room.disconnect() }
+            if let activeRoomID {
+                for client in clients { try? await client.send("v1/rooms/\(activeRoomID)/leave", body: EmptyBody()) }
+            }
+            throw error
+        }
+        for room in rooms { await room.disconnect() }
+        if let activeRoomID {
+            for client in clients { try? await client.send("v1/rooms/\(activeRoomID)/leave", body: EmptyBody()) }
+        }
+    }
 }
