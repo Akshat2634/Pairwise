@@ -132,7 +132,8 @@ enum UISnapshots {
                 SharedCursorLayer(pointers: [RemotePointer(id: "harshit", x: 0.32, y: 0.35, updatedAt: .now),
                                             RemotePointer(id: "bharat", x: 0.65, y: 0.58, updatedAt: .now),
                                             RemotePointer(id: "saurab", x: 0.96, y: 0.94, updatedAt: .now)],
-                                  names: ["harshit": "Harshit", "bharat": "Bharat", "saurab": "Saurab"])
+                                  names: ["harshit": "Harshit", "bharat": "Bharat", "saurab": "Saurab"],
+                                  contentSize: CGSize(width: 1920, height: 1080))
             }
         }
         print("Rendered UI snapshots to \(directory.path)")
