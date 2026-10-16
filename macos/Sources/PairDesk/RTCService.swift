@@ -54,8 +54,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     var usesIndependentCursors: Bool { !isSharing && cursorSessionID != nil }
     var canPointAtRemoteScreen: Bool { connected && !isSharing && screenTrack != nil && activeSharerIdentity != nil }
     @Published private(set) var localIdentity: String?
-    @Published private(set) var audioInputDevices: [AudioDevice] = []
-    @Published private(set) var audioOutputDevices: [AudioDevice] = []
+    @Published private(set) var audioInputDevices: [AudioDeviceChoice] = []
+    @Published private(set) var audioOutputDevices: [AudioDeviceChoice] = []
     @Published private(set) var selectedAudioInputID = ""
     @Published private(set) var selectedAudioOutputID = ""
     @Published private(set) var savedAudioInputUnavailable = false
@@ -291,7 +291,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         selectedAudioInputID = device.deviceId
         UserDefaults.standard.set(device.deviceId, forKey: "audioInputDeviceID")
         savedAudioInputUnavailable = false
-        audioInputDevices = AudioManager.shared.inputDevices
+        audioInputDevices = Self.audioDeviceChoices(AudioManager.shared.inputDevices)
     }
 
     func selectAudioOutput(_ deviceID: String) {
@@ -300,7 +300,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         selectedAudioOutputID = device.deviceId
         UserDefaults.standard.set(device.deviceId, forKey: "audioOutputDeviceID")
         savedAudioOutputUnavailable = false
-        audioOutputDevices = AudioManager.shared.outputDevices
+        audioOutputDevices = Self.audioDeviceChoices(AudioManager.shared.outputDevices)
     }
 
     private func refreshAudioDevices(using manager: AudioManager = .shared) {
@@ -322,10 +322,16 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                 savedAudioOutputUnavailable = true
             }
         }
-        audioInputDevices = inputs
-        audioOutputDevices = outputs
+        audioInputDevices = Self.audioDeviceChoices(inputs)
+        audioOutputDevices = Self.audioDeviceChoices(outputs)
         selectedAudioInputID = manager.inputDevice.deviceId
         selectedAudioOutputID = manager.outputDevice.deviceId
+    }
+
+    private static func audioDeviceChoices(_ devices: [AudioDevice]) -> [AudioDeviceChoice] {
+        AudioDeviceChoice.unique(devices.map {
+            AudioDeviceChoice(id: $0.deviceId, name: $0.name, isDefault: $0.isDefault)
+        })
     }
 
     func refreshScreenNetworkQuality() {

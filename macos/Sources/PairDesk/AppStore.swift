@@ -486,13 +486,13 @@ final class AppStore: ObservableObject {
         if room != nil, playSound, playCallSounds { NSSound(named: NSSound.Name("Pop"))?.play() }
     }
 
-    func shareScreen() async {
+    func shareScreen(source: ScreenShareSource = .display) async {
         guard !busy, let room = activeRoom else { return }
         busy = true
         defer { busy = false }
         struct Body: Encodable { let enabled: Bool }
         do {
-            let selection = try await SystemScreenPicker.shared.chooseSource()
+            let selection = try await SystemScreenPicker.shared.chooseSource(source)
             try await api.send("v1/rooms/\(room.id)/share", body: Body(enabled: true))
             screenClaimRoomID = room.id
             try await rtc.startScreenShare(contentFilter: selection.filter, sourceRect: selection.sourceRect)
@@ -502,13 +502,13 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func changeScreenSource() async {
+    func changeScreenSource(source: ScreenShareSource = .display) async {
         guard !busy, let room = activeRoom, rtc.isSharing else { return }
         busy = true
         defer { busy = false }
         do {
             // Pick first so canceling leaves the current share untouched.
-            let selection = try await SystemScreenPicker.shared.chooseSource()
+            let selection = try await SystemScreenPicker.shared.chooseSource(source)
             await rtc.stopScreenShare()
             guard !rtc.isSharing else { throw APIError(status: 0, message: "The current screen share could not be stopped safely.") }
             try await rtc.startScreenShare(contentFilter: selection.filter, sourceRect: selection.sourceRect)

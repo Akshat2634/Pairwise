@@ -189,12 +189,15 @@ struct MenuBarPanel: View {
                          systemImage: rtc.isSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle",
                          highlight: rtc.isSharing ? Theme.accent : nil,
                          action: { if rtc.isSharing { Task { await store.stopSharing() } } else { show("share") } }) {
-                    if rtc.isSharing {
-                        Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy)
-                    } else if rtc.screenTrack != nil {
+                    if !rtc.isSharing, rtc.screenTrack != nil {
                         Button("Show shared screen") { show("screen") }
-                    } else {
-                        Text("Choose a display or window when you share")
+                        Divider()
+                    }
+                    Section(rtc.isSharing ? "Change source" : "Share") {
+                        ForEach(ScreenShareSource.allCases) { source in
+                            Button("\(source.title)…") { chooseShareSource(source) }
+                                .disabled(store.busy)
+                        }
                     }
                 }
             }
@@ -219,8 +222,8 @@ struct MenuBarPanel: View {
             if rtc.savedAudioInputUnavailable { Text("Saved microphone unavailable; using system default") }
             if rtc.audioInputDevices.isEmpty { Text("No microphones found") }
             ForEach(rtc.audioInputDevices) { device in
-                Button { rtc.selectAudioInput(device.deviceId) } label: {
-                    if rtc.selectedAudioInputID == device.deviceId { Label(device.name, systemImage: "checkmark") } else { Text(device.name) }
+                Button { rtc.selectAudioInput(device.id) } label: {
+                    if rtc.selectedAudioInputID == device.id { Label(device.title, systemImage: "checkmark") } else { Text(device.title) }
                 }
             }
         }
@@ -228,8 +231,8 @@ struct MenuBarPanel: View {
             if rtc.savedAudioOutputUnavailable { Text("Saved speaker unavailable; using system default") }
             if rtc.audioOutputDevices.isEmpty { Text("System default") }
             ForEach(rtc.audioOutputDevices) { device in
-                Button { rtc.selectAudioOutput(device.deviceId) } label: {
-                    if rtc.selectedAudioOutputID == device.deviceId { Label(device.name, systemImage: "checkmark") } else { Text(device.name) }
+                Button { rtc.selectAudioOutput(device.id) } label: {
+                    if rtc.selectedAudioOutputID == device.id { Label(device.title, systemImage: "checkmark") } else { Text(device.title) }
                 }
             }
         }
@@ -438,6 +441,16 @@ struct MenuBarPanel: View {
             case "share": AppWindows.shared.showSharePicker(store: store)
             case "screen": AppWindows.shared.showSharedScreen(store: store)
             default: break
+            }
+        }
+    }
+
+    private func chooseShareSource(_ source: ScreenShareSource) {
+        DispatchQueue.main.async {
+            StatusBarController.shared?.closePopover()
+            Task {
+                if rtc.isSharing { await store.changeScreenSource(source: source) }
+                else { await store.shareScreen(source: source) }
             }
         }
     }

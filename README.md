@@ -22,6 +22,8 @@ Pairwise uses Apple's native ScreenCaptureKit content-sharing picker. A person c
 
 Remote mouse and keyboard input is optional. macOS requires the person at the shared Mac to grant Pairwise Accessibility access before input can be injected. Voice uses the microphone only after the person enables it. The app never starts capture, microphone, or transcription just by launching.
 
+The microphone menu lists **System default** separately from individual microphones and speakers, so the default-route alias does not repeat a hardware name. Devices are identified by their stable IDs. The screen-share menu offers **Entire display**, **Region**, and **Window**; each opens the matching macOS picker, and Region then opens the crop selector.
+
 While sharing, a click-through border in the app's accent color marks the selected display or cropped region. On macOS 15.2 and later it also follows a shared window as it moves or resizes. It stays visible across Spaces and full-screen apps, and disappears when capture stops or the call ends. On macOS 14–15.1 the custom border supports single-display setups; other sources retain the macOS sharing indicator because the native picker does not expose their identities on those versions.
 
 Incoming calls ring repeatedly until answered, declined, cancelled, or expired. A short confirmation tune plays once a teammate is connected to the media room. Both follow **Play call sounds** in settings; switching it off immediately silences ringing.

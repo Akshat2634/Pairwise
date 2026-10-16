@@ -161,6 +161,7 @@ struct CallTile<MenuItems: View>: View {
                     .frame(width: 26, height: 44).contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .accessibilityLabel("\(title) options")
         }
         .foregroundStyle(highlight == nil ? Color.primary : Color.white)
         .background(highlight ?? Theme.surfaceRaised, in: RoundedRectangle(cornerRadius: 10))

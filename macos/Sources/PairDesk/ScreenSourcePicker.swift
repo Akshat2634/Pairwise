@@ -3,6 +3,26 @@ import AppKit
 import ScreenCaptureKit
 import SwiftUI
 
+enum ScreenShareSource: String, CaseIterable, Identifiable {
+    case display, region, window
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .display: return "Entire display"
+        case .region: return "Region"
+        case .window: return "Window"
+        }
+    }
+    var explanation: String {
+        switch self {
+        case .display: return "Choose the entire display you want to share in the macOS picker."
+        case .region: return "Choose a display in the macOS picker, then select the region you want to share."
+        case .window: return "Choose a window in the macOS picker. Other windows stay private."
+        }
+    }
+}
+
 enum ScreenCropGeometry {
     static func normalizedCrop(dragRect: CGRect, contentRect: CGRect) -> CGRect? {
         guard contentRect.width > 0, contentRect.height > 0 else { return nil }
@@ -118,9 +138,9 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
     private var cropContinuation: CheckedContinuation<CGRect?, Error>?
     private var cropWindow: NSWindow?
 
-    func chooseSource() async throws -> (filter: SCContentFilter, sourceRect: CGRect) {
-        let filter = try await chooseDisplay()
-        guard filter.style != .window else {
+    func chooseSource(_ source: ScreenShareSource = .display) async throws -> (filter: SCContentFilter, sourceRect: CGRect) {
+        let filter = try await chooseDisplay(source)
+        guard source == .region, filter.style != .window else {
             return (filter, .zero)
         }
         let configuration = SCStreamConfiguration()
@@ -137,16 +157,17 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
         return (filter, sourceRect)
     }
 
-    func chooseDisplay() async throws -> SCContentFilter {
+    private func chooseDisplay(_ source: ScreenShareSource) async throws -> SCContentFilter {
         try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             let picker = SCContentSharingPicker.shared
             var configuration = picker.defaultConfiguration
-            configuration.allowedPickerModes = [.singleDisplay, .singleWindow]
+            configuration.allowedPickerModes = source == .window ? [.singleWindow] : [.singleDisplay]
             picker.defaultConfiguration = configuration
             picker.add(self)
             picker.isActive = true
-            picker.present(using: .display)
+            NSApp.activate(ignoringOtherApps: true)
+            picker.present(using: source == .window ? .window : .display)
         }
     }
 
