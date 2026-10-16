@@ -104,7 +104,7 @@ enum UISnapshots {
             $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
             $0.activeRoom = room; $0.callStartedAt = Date().addingTimeInterval(-185)
             $0.rtc.debugSetCall(participants: [CallParticipant(identity: me.id, name: me.name, isLocal: true),
-                                               CallParticipant(identity: harshit.id, name: harshit.name, isLocal: false, isSpeaking: true)],
+                                               CallParticipant(identity: harshit.id, name: harshit.name, isLocal: false, isSpeaking: true, isMicrophoneMuted: false)],
                                 microphoneEnabled: true)
         }
         snapshot("menu-in-call", to: directory, compact: true) { MenuBarPanel(store: inCall, rtc: inCall.rtc, loginItem: loginItem) }
@@ -136,6 +136,16 @@ enum UISnapshots {
                                 microphoneEnabled: false)
         }
         snapshot("menu-in-call-muted", to: directory, compact: true) { MenuBarPanel(store: muted, rtc: muted.rtc, loginItem: loginItem) }
+        let microphoneStates = store {
+            $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
+            $0.activeRoom = room
+            $0.rtc.debugSetCall(participants: [CallParticipant(identity: me.id, name: me.name, isLocal: true),
+                                               CallParticipant(identity: harshit.id, name: harshit.name, isLocal: false),
+                                               CallParticipant(identity: team[2].id, name: team[2].name, isLocal: false, isMicrophoneMuted: false),
+                                               CallParticipant(identity: team[3].id, name: team[3].name, isLocal: false, isSpeaking: true, isMicrophoneMuted: false)],
+                                microphoneEnabled: true)
+        }
+        snapshot("menu-microphone-states", to: directory, compact: true) { MenuBarPanel(store: microphoneStates, rtc: microphoneStates.rtc, loginItem: loginItem) }
         let syncing = store {
             $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
             $0.activeRoom = room; $0.callStartedAt = Date().addingTimeInterval(-410)
@@ -151,7 +161,7 @@ enum UISnapshots {
         snapshot("window-account", to: directory) { AccountView(store: idle).environmentObject(loginItem) }
         snapshot("window-share-picker", to: directory) { ScreenSharePickerView(store: ringing) }
         snapshot("window-shared-screen", to: directory, size: CGSize(width: 1000, height: 620)) {
-            SharedScreenWindow(store: ringing, rtc: ringing.rtc, transcripts: ringing.transcripts)
+            SharedScreenWindow(store: microphoneStates, rtc: microphoneStates.rtc, transcripts: microphoneStates.transcripts)
         }
         snapshot("separate-cursors", to: directory, size: CGSize(width: 1000, height: 620)) {
             ZStack {

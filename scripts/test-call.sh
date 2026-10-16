@@ -37,5 +37,5 @@ if [ "$ready" -ne 1 ]; then cat "$FIXTURE/api.log" >&2; exit 1; fi
 export PAIRDESK_TEST_PASSWORD
 PAIRDESK_TEST_API=http://127.0.0.1:18081
 export PAIRDESK_TEST_API
-(cd macos && swift test -j 4 --filter 'CallIntegrationTests|DirectCallIntegrationTests|CallFeedbackIntegrationTests')
+(cd macos && swift test -j 4 --filter 'CallIntegrationTests|DirectCallIntegrationTests|CallFeedbackIntegrationTests|RemoteMuteIntegrationTests')
 echo 'Four native clients verified against the selected LiveKit endpoint; synthetic accounts and API cleaned up.'
