@@ -649,6 +649,16 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             guard let self, self.shareTrack?.capturer === capturer else { return }
             // Includes the macOS Stop Sharing control and capture failures.
             self.sharingIndicator.hide()
+            self.revokeControl()
+            // LiveKit already unpublishes stopped screen capturers. Finish
+            // local cleanup in didUnpublishTrack instead of racing that request.
+        }
+    }
+
+    nonisolated func room(_ room: Room, participant: LocalParticipant, didUnpublishTrack publication: LocalTrackPublication) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room,
+                  let track = self.shareTrack, publication.track === track else { return }
             await self.stopScreenShare()
         }
     }
