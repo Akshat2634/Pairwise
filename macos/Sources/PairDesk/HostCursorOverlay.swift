@@ -40,7 +40,7 @@ final class HostCursorOverlay {
     /// excluding our own overlay so viewers don't receive duplicate cursors.
     func captureFilter(from selection: SCContentFilter, displayID: CGDirectDisplayID) async throws -> SCContentFilter {
         guard let panel, selection.style == .display, #available(macOS 14.4, *) else { return selection }
-        let owned = try await SCShareableContent.currentProcess
+        let owned = try await Self.currentProcessContent()
         guard self.panel === panel else { throw CancellationError() }
         let display: SCDisplay?
         if #available(macOS 15.2, *) { display = selection.includedDisplays.first { $0.displayID == displayID } }
@@ -54,6 +54,21 @@ final class HostCursorOverlay {
         let filter = SCContentFilter(display: display, excludingWindows: [window])
         filter.includeMenuBar = selection.includeMenuBar
         return filter
+    }
+
+    @available(macOS 14.4, *)
+    static func currentProcessContent() async throws -> SCShareableContent {
+        // Handle nullable replies directly instead of using the imported async
+        // getter, which crashes in the macOS 15 test runner.
+        try await withCheckedThrowingContinuation { continuation in
+            SCShareableContent.getCurrentProcessShareableContent { content, error in
+                if let content { continuation.resume(returning: content) }
+                else {
+                    continuation.resume(throwing: error ?? NSError(domain: "PairDesk.HostCursorOverlay", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Current-process capture information was unavailable."]))
+                }
+            }
+        }
     }
 
     func update(pointers: [RemotePointer], names: [String: String]) {
