@@ -21,6 +21,7 @@ final class CallFeedbackIntegrationTests: XCTestCase {
         let targetTune = RecordingCallTone()
         let caller = AppStore(callAudio: CallAudioFeedback { _ in callerTune })
         let target = AppStore(callAudio: CallAudioFeedback { $0 == .ringing ? ring : targetTune })
+        trace("Created app clients")
         let savedMuted = UserDefaults.standard.object(forKey: "startCallsMuted")
         let savedSounds = UserDefaults.standard.object(forKey: "playCallSounds")
         defer {
@@ -37,7 +38,9 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             await target.refresh()
             await caller.refresh()
             let person = try XCTUnwrap(caller.users.first { $0.id == targetLogin.user.id })
+            trace("Calling online recipient")
             await caller.call(person)
+            trace("Caller joined")
             XCTAssertNotNil(caller.activeRoom, caller.error ?? "Caller failed to join")
             XCTAssertEqual(callerTune.plays, 0, "Joining an empty room must not confirm a call")
             await target.refreshInvitations()
@@ -46,7 +49,9 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             XCTAssertEqual(ring.numberOfLoops, -1)
             await target.refreshInvitations()
             XCTAssertEqual(ring.plays, 1, "Polling must not restart ringing")
+            trace("Accepting incoming call")
             await target.acceptCall(incoming)
+            trace("Recipient joined")
             XCTAssertNotNil(target.activeRoom, target.error ?? "Target failed to join")
             for _ in 0..<100 {
                 if callerTune.plays == 1 && targetTune.plays == 1 { break }
@@ -65,6 +70,7 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             XCTAssertEqual(targetTune.plays, 1)
             await target.leave()
             await caller.leave()
+            trace("Connected call ended")
 
             await caller.refresh()
             await target.refresh()
@@ -73,6 +79,7 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             let declined = try XCTUnwrap(target.incomingCall)
             XCTAssertEqual(ring.plays, 2)
             await target.declineCall(declined)
+            trace("Second call declined")
             await caller.refreshInvitations()
             XCTAssertNil(target.incomingCall)
             XCTAssertEqual(ring.stops, 2)
@@ -86,6 +93,7 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             let cancelled = try XCTUnwrap(caller.outgoingCalls.first)
             XCTAssertEqual(ring.plays, 3)
             await caller.cancelCall(cancelled)
+            trace("Third call cancelled")
             await target.refreshInvitations()
             XCTAssertNil(target.incomingCall)
             XCTAssertEqual(ring.stops, 3)
@@ -97,5 +105,9 @@ final class CallFeedbackIntegrationTests: XCTestCase {
         }
         await target.leave()
         await caller.leave()
+    }
+
+    private func trace(_ message: String) {
+        FileHandle.standardError.write(Data("Call feedback integration: \(message)\n".utf8))
     }
 }
