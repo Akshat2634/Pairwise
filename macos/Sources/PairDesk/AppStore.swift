@@ -35,6 +35,7 @@ final class AppStore: ObservableObject {
     private var subscriptions = Set<AnyCancellable>()
     private var hadRemoteParticipant = false
     private var restoringSession = false
+    private var persistsSession = true
     private var token: String?
     private var refreshTask: Task<Void, Never>?
     private var callRefreshTask: Task<Void, Never>?
@@ -105,9 +106,14 @@ final class AppStore: ObservableObject {
         callAudio.update(incomingID: incomingCall?.id, connected: mediaCallConnected, enabled: playCallSounds)
     }
 
+    private func clearSavedSession() {
+        if persistsSession { SessionVault.clear() }
+    }
+
     #if DEBUG
     /// Isolated integration clients must never read or overwrite the person's saved session.
     func debugUseSession(user: TeamUser, token: String, server: String) {
+        persistsSession = false
         serverAddress = server
         self.token = token
         self.user = user
@@ -115,7 +121,7 @@ final class AppStore: ObservableObject {
     #endif
 
     func restore() async {
-        guard !restoringSession, user == nil else { return }
+        guard persistsSession, !restoringSession, user == nil else { return }
         restoringSession = true
         busy = true
         defer { busy = false; restoringSession = false }
@@ -128,7 +134,7 @@ final class AppStore: ObservableObject {
             startRefresh()
         } catch {
             if (error as? APIError)?.status == 401 {
-                SessionVault.clear()
+                clearSavedSession()
                 token = nil
             }
             self.error = error.localizedDescription
@@ -145,7 +151,9 @@ final class AppStore: ObservableObject {
             let client = try APIClient(server: serverAddress)
             let response: LoginResponse = try await client.post("v1/login", body: Body(email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password))
             let saved = SavedSession(token: response.token, server: serverAddress)
-            try await Task.detached(priority: .userInitiated) { try SessionVault.save(saved) }.value
+            if persistsSession {
+                try await Task.detached(priority: .userInitiated) { try SessionVault.save(saved) }.value
+            }
             token = response.token
             user = response.user
             UserDefaults.standard.set(serverAddress, forKey: "serverAddress")
@@ -164,7 +172,7 @@ final class AppStore: ObservableObject {
         callInvitations = []
         await leave()
         try? await api.send("v1/logout", body: EmptyBody())
-        SessionVault.clear()
+        clearSavedSession()
         token = nil
         user = nil
         users = []
@@ -221,7 +229,7 @@ final class AppStore: ObservableObject {
                 refreshTask?.cancel()
                 callRefreshTask?.cancel()
                 await leave()
-                SessionVault.clear()
+                clearSavedSession()
                 token = nil
                 user = nil
                 self.error = "Your session has expired. Sign in again."
