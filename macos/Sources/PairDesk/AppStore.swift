@@ -473,7 +473,7 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func leave(playSound: Bool = false) async {
+    func leave() async {
         transcripts.setEnabled(false)
         transcripts.clear()
         hadRemoteParticipant = false
@@ -483,7 +483,6 @@ final class AppStore: ObservableObject {
         screenClaimRoomID = nil
         await rtc.disconnect()
         if let room { try? await api.send("v1/rooms/\(room.id)/leave", body: EmptyBody()) }
-        if room != nil, playSound, playCallSounds { NSSound(named: NSSound.Name("Pop"))?.play() }
     }
 
     func shareScreen(source: ScreenShareSource = .display) async {

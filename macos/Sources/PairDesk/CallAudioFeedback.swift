@@ -11,12 +11,17 @@ protocol CallTonePlaying: AnyObject {
 extension AVAudioPlayer: CallTonePlaying {}
 
 enum CallTone {
-    case ringing, connected
+    case ringing, connected, disconnected
 
     /// Original, quiet PCM tones; no downloaded sounds or system alert-volume dependency.
     var wavData: Data {
         let sampleRate = 24_000
-        let duration = self == .ringing ? 3.0 : 0.65
+        let duration: Double
+        switch self {
+        case .ringing: duration = 3
+        case .connected: duration = 0.65
+        case .disconnected: duration = 0.45
+        }
         let count = Int(duration * Double(sampleRate))
         var pcm = Data(capacity: count * 2)
         for index in 0..<count {
@@ -33,6 +38,10 @@ enum CallTone {
                 start = floor(time / 0.18) * 0.18
                 length = time < 0.54 ? 0.16 : 0
                 frequencies = [time < 0.18 ? 523.25 : (time < 0.36 ? 659.25 : 783.99)]
+            case .disconnected:
+                start = time < 0.20 ? 0 : 0.20
+                length = 0.18
+                frequencies = [time < 0.20 ? 659.25 : 440]
             }
             let localTime = time - start
             let envelope = localTime >= 0 && localTime < length
@@ -61,7 +70,7 @@ enum CallTone {
 final class CallAudioFeedback {
     private let makePlayer: (CallTone) -> CallTonePlaying?
     private var ring: CallTonePlaying?
-    private var confirmation: CallTonePlaying?
+    private var transitionTone: CallTonePlaying?
     private var ringingID: String?
     private var silencedID: String?
     private var wasConnected = false
@@ -83,14 +92,13 @@ final class CallAudioFeedback {
                 ring?.play()
             }
         }
-        if connected && !wasConnected && enabled {
-            confirmation?.stop()
-            confirmation = makePlayer(.connected)
-            confirmation?.play()
-        }
-        if !enabled || !connected {
-            confirmation?.stop()
-            confirmation = nil
+        if !enabled {
+            transitionTone?.stop()
+            transitionTone = nil
+        } else if connected != wasConnected {
+            transitionTone?.stop()
+            transitionTone = makePlayer(connected ? .connected : .disconnected)
+            transitionTone?.play()
         }
         wasConnected = connected
     }

@@ -211,7 +211,7 @@ struct MenuBarPanel: View {
                     Text("Call is full · four people").font(.caption).foregroundStyle(Theme.textMuted)
                 }
                 Spacer()
-                Button("End call") { Task { await store.leave(playSound: true) } }.buttonStyle(DangerButtonStyle())
+                Button("End call") { Task { await store.leave() } }.buttonStyle(DangerButtonStyle())
             }
         }
     }

@@ -139,7 +139,7 @@ struct SharedScreenWindow: View {
                 if rtc.isSharing { Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy) }
                 Button { showTranscript.toggle() } label: { Image(systemName: "text.bubble") }.help("Local transcript")
                 Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
-                Button("Hang up") { Task { await store.leave(playSound: true) } }.tint(.red)
+                Button("Hang up") { Task { await store.leave() } }.tint(.red)
             }.buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 9)
             HStack(spacing: 0) {
                 ZStack {

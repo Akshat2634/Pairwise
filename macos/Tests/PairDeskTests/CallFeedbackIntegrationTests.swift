@@ -6,7 +6,7 @@ final class CallFeedbackIntegrationTests: XCTestCase {
     /// Exercises AppStore actions, invitation polling, and real RTCService/LiveKit connections.
     /// Only sound playback is recorded, keeping automated runs quiet and observable.
     @MainActor
-    func testIncomingRingAcceptConnectionTuneDeclineAndCancel() async throws {
+    func testIncomingRingAcceptConnectionAndDisconnectTunesDeclineAndCancel() async throws {
         guard let address = ProcessInfo.processInfo.environment["PAIRDESK_TEST_API"],
               let password = ProcessInfo.processInfo.environment["PAIRDESK_TEST_PASSWORD"] else {
             throw XCTSkip("Run scripts/test-call.sh for app call-feedback integration")
@@ -19,8 +19,22 @@ final class CallFeedbackIntegrationTests: XCTestCase {
         let callerTune = RecordingCallTone()
         let ring = RecordingCallTone()
         let targetTune = RecordingCallTone()
-        let caller = AppStore(callAudio: CallAudioFeedback { _ in callerTune })
-        let target = AppStore(callAudio: CallAudioFeedback { $0 == .ringing ? ring : targetTune })
+        let callerEnd = RecordingCallTone()
+        let targetEnd = RecordingCallTone()
+        let caller = AppStore(callAudio: CallAudioFeedback {
+            switch $0 {
+            case .ringing: return nil
+            case .connected: return callerTune
+            case .disconnected: return callerEnd
+            }
+        })
+        let target = AppStore(callAudio: CallAudioFeedback {
+            switch $0 {
+            case .ringing: return ring
+            case .connected: return targetTune
+            case .disconnected: return targetEnd
+            }
+        })
         trace("Created app clients")
         let savedMuted = UserDefaults.standard.object(forKey: "startCallsMuted")
         let savedSounds = UserDefaults.standard.object(forKey: "playCallSounds")
@@ -69,7 +83,18 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             XCTAssertEqual(callerTune.plays, 1)
             XCTAssertEqual(targetTune.plays, 1)
             await target.leave()
+            for _ in 0..<100 {
+                if caller.activeRoom == nil && !caller.rtc.connected { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            XCTAssertNil(caller.activeRoom, "Remote hang-up must end the caller's call")
+            XCTAssertFalse(caller.rtc.connected)
+            XCTAssertEqual(targetEnd.plays, 1, "Local hang-up must play the disconnect tune")
+            XCTAssertEqual(callerEnd.plays, 1, "Remote hang-up must play the disconnect tune")
+            await target.leave()
             await caller.leave()
+            XCTAssertEqual(targetEnd.plays, 1, "Repeated cleanup must not replay the tune")
+            XCTAssertEqual(callerEnd.plays, 1)
             trace("Connected call ended")
 
             await caller.refresh()
@@ -105,6 +130,8 @@ final class CallFeedbackIntegrationTests: XCTestCase {
         }
         await target.leave()
         await caller.leave()
+        XCTAssertEqual(targetEnd.plays, 1, "Declined and cancelled calls must not play a disconnect tune")
+        XCTAssertEqual(callerEnd.plays, 1)
     }
 
     private func trace(_ message: String) {
