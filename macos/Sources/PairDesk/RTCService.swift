@@ -12,6 +12,7 @@ struct CallParticipant: Identifiable, Equatable {
     let name: String
     let isLocal: Bool
     var isSpeaking: Bool = false
+    var isMicrophoneMuted: Bool = true
     var id: String { identity }
 }
 
@@ -279,6 +280,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             isMicrophoneEnabled = enabled
             if enabled { attachLocalAudioRenderer() }
             else { detachLocalAudioRenderer(); localMicrophoneLevel = 0 }
+            refreshParticipants()
         } catch {
             self.error = "Microphone could not be \(enabled ? "enabled" : "disabled"): \(error.localizedDescription)"
             throw error
@@ -668,8 +670,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
 
     nonisolated func room(_ room: Room, participant: LocalParticipant, didUnpublishTrack publication: LocalTrackPublication) {
         Task { @MainActor [weak self] in
-            guard let self, self.room === room,
-                  let track = self.shareTrack, publication.track === track else { return }
+            guard let self, self.room === room else { return }
+            if publication.source == .microphone {
+                self.isMicrophoneEnabled = false
+                self.detachLocalAudioRenderer()
+                self.refreshParticipants()
+            }
+            guard let track = self.shareTrack, publication.track === track else { return }
             await self.stopScreenShare()
         }
     }
@@ -1121,10 +1128,19 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         }
     }
 
-    nonisolated func room(_ room: Room, participant: RemoteParticipant, didUnpublishTrack publication: RemoteTrackPublication) {
-        guard publication.source == .screenShareVideo else { return }
+    nonisolated func room(_ room: Room, participant: RemoteParticipant, didPublishTrack publication: RemoteTrackPublication) {
+        guard publication.kind == .audio else { return }
         Task { @MainActor [weak self] in
             guard let self, self.room === room else { return }
+            self.refreshParticipants()
+        }
+    }
+
+    nonisolated func room(_ room: Room, participant: RemoteParticipant, didUnpublishTrack publication: RemoteTrackPublication) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room else { return }
+            self.refreshParticipants()
+            guard publication.source == .screenShareVideo else { return }
             self.screenTrack = nil
             if self.localControllerEpoch != nil { self.emergencyStop() }
             self.refreshSharer()
@@ -1139,12 +1155,15 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     }
 
     nonisolated func room(_ room: Room, participant: Participant, trackPublication: TrackPublication, didUpdateIsMuted isMuted: Bool) {
-        guard participant is LocalParticipant, trackPublication.kind == .audio else { return }
+        guard trackPublication.kind == .audio else { return }
         Task { @MainActor [weak self] in
             guard let self, self.room === room else { return }
-            self.isMicrophoneEnabled = !isMuted
-            if isMuted { self.detachLocalAudioRenderer() }
-            else { self.attachLocalAudioRenderer() }
+            if participant is LocalParticipant, trackPublication.source == .microphone {
+                self.isMicrophoneEnabled = !isMuted
+                if isMuted { self.detachLocalAudioRenderer() }
+                else { self.attachLocalAudioRenderer() }
+            }
+            self.refreshParticipants()
         }
     }
 
@@ -1736,11 +1755,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         guard let room else { return }
         let localID = room.localParticipant.identity?.stringValue ?? localIdentity ?? "local"
         let local = CallParticipant(identity: localID, name: room.localParticipant.name ?? localID,
-                                    isLocal: true, isSpeaking: room.localParticipant.isSpeaking)
+                                    isLocal: true, isSpeaking: room.localParticipant.isSpeaking,
+                                    isMicrophoneMuted: !isMicrophoneEnabled)
         let remotes = room.remoteParticipants.values.compactMap { participant -> CallParticipant? in
             guard let id = participant.identity?.stringValue else { return nil }
             return CallParticipant(identity: id, name: participant.name ?? id,
-                                   isLocal: false, isSpeaking: participant.isSpeaking)
+                                   isLocal: false, isSpeaking: participant.isSpeaking,
+                                   isMicrophoneMuted: !participant.isMicrophoneEnabled())
         }.sorted { $0.identity < $1.identity }
         participants = Array(([local] + remotes).prefix(4))
     }

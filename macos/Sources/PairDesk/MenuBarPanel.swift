@@ -143,7 +143,7 @@ struct MenuBarPanel: View {
                         PersonAvatar(name: person.name, id: person.identity, size: 28)
                         Text(person.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
                         Spacer()
-                        if person.isSpeaking { Image(systemName: "waveform").font(.caption).foregroundStyle(Theme.online) }
+                        ParticipantMicrophoneStatus(participant: person)
                     }
                 }
                 ForEach(store.outgoingCalls) { invitation in

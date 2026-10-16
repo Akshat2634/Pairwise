@@ -86,7 +86,7 @@ struct SharedScreenWindow: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
-                Text(rtc.participants.filter { !$0.isLocal }.map(\.name).joined(separator: ", ")).font(.headline).lineLimit(1)
+                Text("Call · \(max(1, rtc.participants.count))").font(.headline).lineLimit(1)
                 if rtc.isReconnecting {
                     Label(rtc.isSharing ? "Reconnecting · control paused" : "Reconnecting call…", systemImage: "arrow.triangle.2.circlepath")
                         .font(.caption).foregroundStyle(.orange).lineLimit(1)
@@ -141,6 +141,19 @@ struct SharedScreenWindow: View {
                 Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
                 Button("Hang up") { Task { await store.leave() } }.tint(.red)
             }.buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 9)
+            if rtc.participants.contains(where: { !$0.isLocal }) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 20) {
+                        ForEach(rtc.participants.filter { !$0.isLocal }) { person in
+                            HStack(spacing: 6) {
+                                Text(person.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                ParticipantMicrophoneStatus(participant: person)
+                            }
+                        }
+                    }.padding(.horizontal, 16).padding(.vertical, 7)
+                }.fixedSize(horizontal: false, vertical: true)
+                    .background(Theme.surface)
+            }
             HStack(spacing: 0) {
                 ZStack {
                     Color.black
