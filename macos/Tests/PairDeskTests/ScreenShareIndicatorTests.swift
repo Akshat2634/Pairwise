@@ -51,19 +51,39 @@ final class ScreenShareIndicatorTests: XCTestCase {
         defer { indicator.hide(); window.close() }
         indicator.show(.window(CGWindowID(window.windowNumber)))
         let panel = try XCTUnwrap(indicator.panel)
+        try await waitFor { panel.isVisible }
         XCTAssertTrue(panel.isVisible)
         XCTAssertEqual(panel.frame, window.frame)
         window.setFrame(CGRect(x: 250, y: 260, width: 600, height: 400), display: true)
-        try await Task.sleep(for: .milliseconds(450))
+        try await waitFor { panel.frame == window.frame }
         XCTAssertEqual(panel.frame, window.frame)
         window.orderOut(nil)
-        try await Task.sleep(for: .milliseconds(450))
+        try await waitFor { !panel.isVisible }
         XCTAssertFalse(panel.isVisible)
         window.orderFrontRegardless()
-        try await Task.sleep(for: .milliseconds(450))
+        try await waitFor { panel.isVisible }
         XCTAssertTrue(panel.isVisible)
         window.close()
-        try await Task.sleep(for: .milliseconds(450))
+        try await waitFor { !panel.isVisible }
         XCTAssertFalse(panel.isVisible)
+    }
+
+    func testBorderRendersRedWithTransparentInterior() throws {
+        let view = SharingBorderView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let center = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2))
+        XCTAssertEqual(center.alphaComponent, 0)
+        let edge = try XCTUnwrap(bitmap.colorAt(x: Int(2 * CGFloat(bitmap.pixelsWide) / 800),
+                                               y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(edge.redComponent, edge.greenComponent * 1.5)
+        XCTAssertGreaterThan(edge.alphaComponent, 0.9)
+    }
+
+    private func waitFor(_ condition: () -> Bool) async throws {
+        for _ in 0..<40 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
     }
 }

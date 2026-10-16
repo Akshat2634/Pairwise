@@ -160,7 +160,8 @@ final class AppStore: ObservableObject {
         generation += 1
         refreshTask?.cancel()
         callRefreshTask?.cancel()
-        callAudio.update(incomingID: nil, connected: false, enabled: false)
+        invitationPollSequence += 1
+        callInvitations = []
         await leave()
         try? await api.send("v1/logout", body: EmptyBody())
         SessionVault.clear()
@@ -388,6 +389,8 @@ final class AppStore: ObservableObject {
 
     func declineCall(_ invitation: CallInvitation) async {
         guard !busy else { return }
+        busy = true
+        defer { busy = false }
         invitationPollSequence += 1
         callAudio.silenceIncoming(invitation.id)
         do { try await api.send("v1/calls/\(invitation.id)/decline", body: EmptyBody()); await refreshInvitations() }
