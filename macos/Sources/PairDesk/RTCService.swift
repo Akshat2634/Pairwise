@@ -36,9 +36,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     @Published private(set) var connected = false
     @Published private(set) var isMicrophoneEnabled = false
     @Published private(set) var isSharing = false {
-        didSet { if !isSharing { sharingIndicator.hide() } }
+        didSet {
+            if !isSharing { sharingIndicator.hide(); hostCursorOverlay.hide() }
+            else { updateHostCursors() }
+        }
     }
-    @Published private(set) var participants: [CallParticipant] = []
+    @Published private(set) var participants: [CallParticipant] = [] { didSet { updateHostCursors() } }
     @Published private(set) var screenTrack: VideoTrack?
     @Published private(set) var status = "Disconnected"
     @Published private(set) var error: String?
@@ -49,7 +52,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     /// Viewer side: why the sharer will not accept input, when it won't.
     @Published private(set) var remoteControlUnavailableReason: RemoteControlUnavailableReason?
     @Published private(set) var automaticControlEnabled = false
-    @Published private(set) var remotePointers: [RemotePointer] = []
+    @Published private(set) var remotePointers: [RemotePointer] = [] { didSet { updateHostCursors() } }
     @Published private(set) var cursorSessionID: String?
     @Published private(set) var localCursorPosition: CGPoint?
     var usesIndependentCursors: Bool { !isSharing && cursorSessionID != nil }
@@ -88,6 +91,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     private var isStartingShare = false
     private var isStoppingShare = false
     private let sharingIndicator = ScreenShareIndicator()
+    private let hostCursorOverlay = HostCursorOverlay()
     private var accessibilityMonitorTask: Task<Void, Never>?
     private var remoteControlManuallyPaused = false
     private var resumeControlAfterReconnect = false
@@ -530,10 +534,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         var pendingTrack: LocalVideoTrack?
         do {
             let selectedWindow = contentFilter.style == .window
-            let displayBounds: CGRect?
+            let displayID: CGDirectDisplayID?
             if #available(macOS 15.2, *), !selectedWindow, let display = contentFilter.includedDisplays.first {
-                displayBounds = CGDisplayBounds(display.displayID)
-            } else { displayBounds = nil }
+                displayID = display.displayID
+            } else if !selectedWindow, NSScreen.screens.count == 1 {
+                displayID = (NSScreen.screens.first?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            } else { displayID = nil }
+            let displayBounds = displayID.map { CGDisplayBounds($0) }
             let selectedFrame: CGRect?
             if let displayBounds {
                 selectedFrame = sourceRect.isEmpty
@@ -545,6 +552,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             } else if !selectedWindow, NSScreen.screens.count == 1 {
                 selectedFrame = sourceRect.isEmpty ? contentFilter.contentRect : sourceRect
             } else { selectedFrame = nil }
+            var captureFilter = contentFilter
+            if let selectedFrame, let displayID, !selectedWindow {
+                hostCursorOverlay.prepare(captureBounds: selectedFrame)
+                captureFilter = try await hostCursorOverlay.captureFilter(from: contentFilter, displayID: displayID)
+            }
             let canControlDisplay = selectedFrame != nil && AXIsProcessTrusted()
             // Older viewers infer view-only from the ".window" suffix; newer
             // ones also receive explicit availability messages.
@@ -557,7 +569,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                                                            includeCurrentApplication: true,
                                                            sourceRect: sourceRect)
             let track = await LocalVideoTrack.createMacOSScreenShareTrack(name: trackName,
-                                                                          contentFilter: contentFilter,
+                                                                          contentFilter: captureFilter,
                                                                           options: captureOptions,
                                                                           reportStatistics: true)
             pendingTrack = track
@@ -606,6 +618,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             pendingTrack = nil
         } catch {
             if let pendingTrack { _ = try? await pendingTrack.capturer.stopCapture() }
+            hostCursorOverlay.hide()
             self.error = "Screen sharing failed: \(error.localizedDescription)"
             throw error
         }
@@ -662,6 +675,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             guard let self, self.shareTrack?.capturer === capturer else { return }
             // Includes the macOS Stop Sharing control and capture failures.
             self.sharingIndicator.hide()
+            self.hostCursorOverlay.hide()
             self.revokeControl()
             // LiveKit already unpublishes stopped screen capturers. Finish
             // local cleanup in didUnpublishTrack instead of racing that request.
@@ -1348,7 +1362,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                 applyRemoteControlAvailability(available, reason: reason)
             }
         case .cursor:
-            guard isSharing, !shareIsWindow,
+            guard isSharing, !shareIsWindow, !isReconnecting,
                   IndependentCursorPolicy.accepts(message, session: cursorSessionID,
                     isParticipant: sender != localIdentity && room?.remoteParticipants.values.contains(where: { $0.identity?.stringValue == sender }) == true,
                     lastSequence: cursorSequenceBySender[sender]) else { return }
@@ -1462,8 +1476,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     }
 
     private func recordRemotePointer(identity: String, x: Double, y: Double) {
-        remotePointers.removeAll { $0.id == identity }
-        remotePointers.append(RemotePointer(id: identity, x: x, y: y, updatedAt: Date()))
+        let pointer = RemotePointer(id: identity, x: x, y: y, updatedAt: Date())
+        if let index = remotePointers.firstIndex(where: { $0.id == identity }) { remotePointers[index] = pointer }
+        else { remotePointers.append(pointer) }
         guard cursorExpiryTask == nil else { return }
         cursorExpiryTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -1477,6 +1492,15 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
 
     private func removeRemotePointer(_ identity: String) {
         remotePointers.removeAll { $0.id == identity }
+    }
+
+    private func updateHostCursors() {
+        guard isSharing, !shareIsWindow, !isReconnecting, shareBounds != nil else {
+            hostCursorOverlay.clear()
+            return
+        }
+        let names = Dictionary(uniqueKeysWithValues: participants.map { ($0.identity, $0.name) })
+        hostCursorOverlay.update(pointers: remotePointers.filter { $0.id != localIdentity && names[$0.id] != nil }, names: names)
     }
 
     /// Cursor presence is lossy, coalesced and separate from the ordered action
@@ -1736,6 +1760,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         isReconnecting = reconnecting
         if reconnecting {
             status = "Reconnecting…"
+            remotePointers.removeAll()
             if isSharing {
                 resumeControlAfterReconnect = automaticControlEnabled
                 if automaticControlEnabled { pauseRemoteControl() }
@@ -1830,6 +1855,19 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     }
 
     #if DEBUG
+    var debugHostCursorPanel: NSPanel? { hostCursorOverlay.panel }
+
+    /// Exercise real cursor packets and native presentation without recording a desktop.
+    func debugStartCursorShare(bounds: CGRect, session: String) {
+        resetIndependentCursors()
+        hostCursorOverlay.prepare(captureBounds: bounds)
+        shareBounds = bounds
+        shareIsWindow = false
+        cursorSessionID = session
+        activeSharerIdentity = localIdentity
+        isSharing = true
+    }
+
     /// UI snapshot fixtures only: stand in for a connected room.
     func debugSetCall(participants: [CallParticipant], microphoneEnabled: Bool, clipboardSync: Bool = false) {
         connected = true

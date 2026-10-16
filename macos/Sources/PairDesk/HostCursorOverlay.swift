@@ -1,0 +1,78 @@
+import AppKit
+import ScreenCaptureKit
+import SwiftUI
+
+/// Named viewer cursors on the sharing desktop. This window never accepts input.
+@MainActor
+final class HostCursorOverlay {
+    private(set) var panel: NSPanel?
+    private var content: NSHostingView<SharedCursorLayer>?
+
+    func prepare(captureBounds: CGRect) {
+        hide()
+        guard let primary = NSScreen.screens.first, captureBounds.width > 0, captureBounds.height > 0,
+              !captureBounds.isInfinite, !captureBounds.isNull else { return }
+        let frame = ScreenShareIndicator.appKitFrame(captureBounds: captureBounds,
+                                                     primaryScreenMaxY: primary.frame.maxY)
+        let panel = CursorOverlayPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
+                                       backing: .buffered, defer: false)
+        panel.title = "PairDesk · Remote cursors"
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        panel.sharingType = .none
+        panel.animationBehavior = .none
+        let content = NSHostingView(rootView: SharedCursorLayer(pointers: [], names: [:], contentSize: frame.size))
+        panel.contentView = content
+        self.content = content
+        self.panel = panel
+        // Register the empty, transparent window before constructing the capture
+        // filter. Keep this window ID for the entire share, even with no cursors.
+        panel.orderFrontRegardless()
+    }
+
+    /// The picker selects a complete display; retain that display and crop while
+    /// excluding our own overlay so viewers don't receive duplicate cursors.
+    func captureFilter(from selection: SCContentFilter, displayID: CGDirectDisplayID) async throws -> SCContentFilter {
+        guard let panel, selection.style == .display, #available(macOS 14.4, *) else { return selection }
+        let owned = try await SCShareableContent.currentProcess
+        guard self.panel === panel else { throw CancellationError() }
+        let display: SCDisplay?
+        if #available(macOS 15.2, *) { display = selection.includedDisplays.first { $0.displayID == displayID } }
+        else { display = owned.displays.first { $0.displayID == displayID } }
+        // Before 15.2 a picker-only grant may redact display information. Keep
+        // the authorized filter and the legacy window sharing type in that case.
+        guard let display else { return selection }
+        guard let window = owned.windows.first(where: { $0.windowID == CGWindowID(panel.windowNumber) }) else {
+            throw CocoaError(.coderValueNotFound, userInfo: [NSLocalizedDescriptionKey: "Could not exclude the local cursor overlay from this display."])
+        }
+        let filter = SCContentFilter(display: display, excludingWindows: [window])
+        filter.includeMenuBar = selection.includeMenuBar
+        return filter
+    }
+
+    func update(pointers: [RemotePointer], names: [String: String]) {
+        guard let panel, let content else { return }
+        content.rootView = SharedCursorLayer(pointers: pointers, names: names, contentSize: panel.frame.size)
+        if pointers.isEmpty { panel.orderOut(nil) }
+        else if !panel.isVisible { panel.orderFrontRegardless() }
+    }
+
+    func clear() { update(pointers: [], names: [:]) }
+
+    func hide() {
+        panel?.close()
+        panel = nil
+        content = nil
+    }
+}
+
+private final class CursorOverlayPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
