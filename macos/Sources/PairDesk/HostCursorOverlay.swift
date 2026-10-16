@@ -47,7 +47,7 @@ final class HostCursorOverlay {
         else { display = owned.displays.first { $0.displayID == displayID } }
         // Before 15.2 a picker-only grant may redact display information. Keep
         // the authorized filter and the legacy window sharing type in that case.
-        guard let display else { return selection }
+        guard let display, display.width > 0, display.height > 0 else { return selection }
         guard let window = owned.windows.first(where: { $0.windowID == CGWindowID(panel.windowNumber) }) else {
             throw CocoaError(.coderValueNotFound, userInfo: [NSLocalizedDescriptionKey: "Could not exclude the local cursor overlay from this display."])
         }

@@ -49,19 +49,27 @@ final class HostCursorOverlayTests: XCTestCase {
         defer { overlay.hide() }
         overlay.prepare(captureBounds: CGDisplayBounds(CGMainDisplayID()))
         let panel = try XCTUnwrap(overlay.panel)
+        trace("Reading current-process capture metadata")
         let content = try await SCShareableContent.currentProcess
+        trace("Read current-process capture metadata")
         XCTAssertTrue(content.windows.contains { $0.windowID == CGWindowID(panel.windowNumber) },
                       "The cursor panel must be discoverable for explicit capture exclusion")
         // Displays may be redacted without capture consent; production gets
         // the selected display from the native picker on macOS 15.2+.
-        if #available(macOS 15.2, *), let display = content.displays.first {
+        if #available(macOS 15.2, *), let display = content.displays.first(where: { $0.width > 0 && $0.height > 0 }) {
+            trace("Constructing the selected-display filter")
             let selection = SCContentFilter(display: display, excludingWindows: [])
             selection.includeMenuBar = true
             let filtered = try await overlay.captureFilter(from: selection, displayID: display.displayID)
+            trace("Constructed the exclusion filter")
             XCTAssertEqual(filtered.includedDisplays.map(\.displayID), [display.displayID])
             XCTAssertEqual(filtered.contentRect, selection.contentRect)
             XCTAssertTrue(filtered.includeMenuBar)
             XCTAssertFalse(filtered.includedWindows.contains { $0.windowID == CGWindowID(panel.windowNumber) })
         }
+    }
+
+    private func trace(_ message: String) {
+        FileHandle.standardError.write(Data("Host cursor capture check: \(message)\n".utf8))
     }
 }
