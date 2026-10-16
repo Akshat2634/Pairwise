@@ -34,8 +34,8 @@ final class CallFeedbackIntegrationTests: XCTestCase {
         caller.playCallSounds = true
         target.playCallSounds = true
         do {
-            await caller.refresh()
             await target.refresh()
+            await caller.refresh()
             let person = try XCTUnwrap(caller.users.first { $0.id == targetLogin.user.id })
             await caller.call(person)
             XCTAssertNotNil(caller.activeRoom, caller.error ?? "Caller failed to join")
