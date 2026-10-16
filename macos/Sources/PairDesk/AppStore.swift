@@ -15,7 +15,7 @@ final class AppStore: ObservableObject {
     @Published var activeTeamCalls: [PairRoom] = []
     /// One-line call status clears itself instead of leaking into the next call.
     @Published var callMessage: String? { didSet { scheduleCallMessageExpiry() } }
-    @Published var activeRoom: PairRoom?
+    @Published var activeRoom: PairRoom? { didSet { updateCallAudio() } }
     @Published var callStartedAt: Date?
     @Published var busy = false
     @Published var error: String?
@@ -103,7 +103,12 @@ final class AppStore: ObservableObject {
     }
 
     private func updateCallAudio() {
-        callAudio.update(incomingID: incomingCall?.id, connected: mediaCallConnected, enabled: playCallSounds)
+        // A matching room means the caller joined successfully. Leaving clears
+        // it immediately, so stale pending polls cannot restart ringback. Once
+        // a peer has joined, old pending invitations must also stay silent.
+        let outgoingID = hadRemoteParticipant ? nil : outgoingCalls.first { $0.room.id == activeRoom?.id }?.id
+        callAudio.update(incomingID: incomingCall?.id, outgoingID: outgoingID,
+                         connected: mediaCallConnected, enabled: playCallSounds)
     }
 
     private func clearSavedSession() {

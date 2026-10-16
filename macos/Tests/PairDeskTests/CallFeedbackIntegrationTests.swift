@@ -6,7 +6,7 @@ final class CallFeedbackIntegrationTests: XCTestCase {
     /// Exercises AppStore actions, invitation polling, and real RTCService/LiveKit connections.
     /// Only sound playback is recorded, keeping automated runs quiet and observable.
     @MainActor
-    func testIncomingRingAcceptConnectionAndDisconnectTunesDeclineAndCancel() async throws {
+    func testCallTonesAcrossAnswerDeclineCancellationAndHangup() async throws {
         guard let address = ProcessInfo.processInfo.environment["PAIRDESK_TEST_API"],
               let password = ProcessInfo.processInfo.environment["PAIRDESK_TEST_PASSWORD"] else {
             throw XCTSkip("Run scripts/test-call.sh for app call-feedback integration")
@@ -19,11 +19,13 @@ final class CallFeedbackIntegrationTests: XCTestCase {
         let callerTune = RecordingCallTone()
         let ring = RecordingCallTone()
         let targetTune = RecordingCallTone()
+        let calling = RecordingCallTone()
         let callerEnd = RecordingCallTone()
         let targetEnd = RecordingCallTone()
         let caller = AppStore(callAudio: CallAudioFeedback {
             switch $0 {
             case .ringing: return nil
+            case .calling: return calling
             case .connected: return callerTune
             case .disconnected: return callerEnd
             }
@@ -31,6 +33,7 @@ final class CallFeedbackIntegrationTests: XCTestCase {
         let target = AppStore(callAudio: CallAudioFeedback {
             switch $0 {
             case .ringing: return ring
+            case .calling: return nil
             case .connected: return targetTune
             case .disconnected: return targetEnd
             }
@@ -57,6 +60,10 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             trace("Caller joined")
             XCTAssertNotNil(caller.activeRoom, caller.error ?? "Caller failed to join")
             XCTAssertEqual(callerTune.plays, 0, "Joining an empty room must not confirm a call")
+            XCTAssertEqual(calling.plays, 1, "The caller must hear ringback while waiting")
+            XCTAssertEqual(calling.numberOfLoops, -1)
+            await caller.refreshInvitations()
+            XCTAssertEqual(calling.plays, 1, "Polling must not restart ringback")
             await target.refreshInvitations()
             let incoming = try XCTUnwrap(target.incomingCall)
             XCTAssertEqual(ring.plays, 1)
@@ -72,13 +79,13 @@ final class CallFeedbackIntegrationTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(100))
             }
             XCTAssertEqual(ring.stops, 1)
+            XCTAssertEqual(calling.stops, 1, "Answering must stop ringback")
             XCTAssertEqual(callerTune.plays, 1)
             XCTAssertEqual(targetTune.plays, 1)
             XCTAssertTrue(caller.rtc.connected)
             XCTAssertTrue(target.rtc.connected)
             XCTAssertFalse(caller.rtc.isMicrophoneEnabled)
             XCTAssertFalse(target.rtc.isMicrophoneEnabled)
-            await caller.refreshInvitations()
             await target.refreshInvitations()
             XCTAssertEqual(callerTune.plays, 1)
             XCTAssertEqual(targetTune.plays, 1)
@@ -91,6 +98,7 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             XCTAssertFalse(caller.rtc.connected)
             XCTAssertEqual(targetEnd.plays, 1, "Local hang-up must play the disconnect tune")
             XCTAssertEqual(callerEnd.plays, 1, "Remote hang-up must play the disconnect tune")
+            XCTAssertEqual(calling.plays, 1, "A stale pending invitation must not restart ringback after connection")
             await target.leave()
             await caller.leave()
             XCTAssertEqual(targetEnd.plays, 1, "Repeated cleanup must not replay the tune")
@@ -103,9 +111,11 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             await target.refreshInvitations()
             let declined = try XCTUnwrap(target.incomingCall)
             XCTAssertEqual(ring.plays, 2)
+            XCTAssertEqual(calling.plays, 2)
             await target.declineCall(declined)
             trace("Second call declined")
             await caller.refreshInvitations()
+            XCTAssertEqual(calling.stops, 2, "Declining must stop ringback")
             XCTAssertNil(target.incomingCall)
             XCTAssertEqual(ring.stops, 2)
             XCTAssertEqual(targetTune.plays, 1, "Declining must not confirm a connection")
@@ -117,12 +127,28 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             await target.refreshInvitations()
             let cancelled = try XCTUnwrap(caller.outgoingCalls.first)
             XCTAssertEqual(ring.plays, 3)
+            XCTAssertEqual(calling.plays, 3)
             await caller.cancelCall(cancelled)
+            XCTAssertEqual(calling.stops, 3, "Cancelling must stop ringback")
             trace("Third call cancelled")
             await target.refreshInvitations()
             XCTAssertNil(target.incomingCall)
             XCTAssertEqual(ring.stops, 3)
             XCTAssertEqual(callerTune.plays, 1, "Unanswered calls must not confirm a connection")
+
+            await target.refresh()
+            await caller.refresh()
+            await caller.call(person)
+            await target.refreshInvitations()
+            XCTAssertEqual(calling.plays, 4)
+            XCTAssertEqual(ring.plays, 4)
+            await caller.leave()
+            XCTAssertEqual(calling.stops, 4, "Ending an unanswered call must stop ringback immediately")
+            await caller.refreshInvitations()
+            await target.refreshInvitations()
+            XCTAssertEqual(calling.plays, 4, "A poll after hang-up must not restart ringback")
+            XCTAssertEqual(ring.stops, 4)
+            trace("Fourth call ended before answer")
         } catch {
             await target.leave()
             await caller.leave()
