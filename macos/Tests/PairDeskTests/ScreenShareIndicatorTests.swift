@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import PairDesk
 
@@ -68,16 +69,24 @@ final class ScreenShareIndicatorTests: XCTestCase {
         XCTAssertFalse(panel.isVisible)
     }
 
-    func testBorderRendersRedWithTransparentInterior() throws {
-        let view = SharingBorderView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
-        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        let center = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2))
-        XCTAssertEqual(center.alphaComponent, 0)
-        let edge = try XCTUnwrap(bitmap.colorAt(x: Int(2 * CGFloat(bitmap.pixelsWide) / 800),
-                                               y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
-        XCTAssertGreaterThan(edge.redComponent, edge.greenComponent * 1.5)
-        XCTAssertGreaterThan(edge.alphaComponent, 0.9)
+    func testBorderRendersThemeAccentWithTransparentInterior() throws {
+        let accent = try XCTUnwrap(NSColor(Theme.accent).usingColorSpace(.deviceRGB))
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let view = SharingBorderView(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
+            view.appearance = NSAppearance(named: appearance)
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.effectiveAppearance.performAsCurrentDrawingAppearance {
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+            }
+            let center = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2))
+            XCTAssertEqual(center.alphaComponent, 0)
+            let edge = try XCTUnwrap(bitmap.colorAt(x: Int(2 * CGFloat(bitmap.pixelsWide) / 800),
+                                                   y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+            XCTAssertEqual(edge.redComponent, accent.redComponent, accuracy: 0.01)
+            XCTAssertEqual(edge.greenComponent, accent.greenComponent, accuracy: 0.01)
+            XCTAssertEqual(edge.blueComponent, accent.blueComponent, accuracy: 0.01)
+            XCTAssertGreaterThan(edge.alphaComponent, 0.9)
+        }
     }
 
     private func waitFor(_ condition: () -> Bool) async throws {

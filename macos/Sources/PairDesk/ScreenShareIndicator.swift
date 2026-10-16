@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import SwiftUI
 
 /// A local, click-through outline. It never activates PairDesk or steals keyboard focus.
 @MainActor
@@ -87,10 +88,10 @@ final class SharingBorderView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let outline = NSBezierPath(rect: bounds.insetBy(dx: 2.5, dy: 2.5))
-        NSColor.black.withAlphaComponent(0.8).setStroke()
+        NSColor(Theme.surface).withAlphaComponent(0.95).setStroke()
         outline.lineWidth = 5
         outline.stroke()
-        NSColor.systemRed.setStroke()
+        NSColor(Theme.accent).setStroke()
         outline.lineWidth = 3
         outline.stroke()
     }
