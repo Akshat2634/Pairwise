@@ -22,6 +22,10 @@ Pairwise uses Apple's native ScreenCaptureKit content-sharing picker. A person c
 
 Remote mouse and keyboard input is optional. macOS requires the person at the shared Mac to grant Pairwise Accessibility access before input can be injected. Voice uses the microphone only after the person enables it. The app never starts capture, microphone, or transcription just by launching.
 
+While sharing, a red, click-through border marks the selected display or cropped region. On macOS 15.2 and later it also follows a shared window as it moves or resizes. It stays visible across Spaces and full-screen apps, and disappears when capture stops or the call ends. On macOS 14–15.1 the custom border supports single-display setups; other sources retain the macOS sharing indicator because the native picker does not expose their identities on those versions.
+
+Incoming calls ring repeatedly until answered, declined, cancelled, or expired. A short confirmation tune plays once a teammate is connected to the media room. Both follow **Play call sounds** in settings; switching it off immediately silences ringing.
+
 The current source adds opt-in [text clipboard sharing](docs/clipboard-sharing.md), group-call join requests, separate named cursors, and adaptive screen quality up to 4K/30. Display sharing lets the sender keep the full display or select a region after the macOS picker. Receiver measurements (resolution, frame rate, packet loss, and RTT) feed back to the sharer; sustained congestion steps quality down, and stable recovery steps it back up. Cursor motion is coalesced and sent separately from reliable clicks and key transitions. Two-Mac testing is still required for crop alignment, real input, clipboard paste, join prompts, adaptive transitions, and perceived quality; automated tests do not prove those behaviors.
 
 ## Build and run locally
@@ -64,7 +68,7 @@ The whisper.cpp source and Tiny model download into ignored `.cache/` and are ch
 
 To review UI changes without a server or a call, `sh scripts/ui-snapshots.sh` renders the main screens with fixture data to PNG files in `.cache/ui-snapshots/` using a debug build.
 
-The LiveKit integration test needs a running local stack and is exercised separately by `scripts/test-call.sh`. Hardware checks that require two Macs, OS permission prompts, sleep/wake, and cross-network TURN remain manual; unit tests cannot prove those behaviors.
+The LiveKit integration test needs a running local stack and is exercised separately by `scripts/test-call.sh`. It includes app-level incoming ring, accept, connection confirmation, decline, and cancellation checks using real API and media connections with recorded sound playback. The Tests workflow runs the server checks, native suite, and integration tests on macOS with LiveKit v1.8.4. Hardware checks that require two Macs, OS permission prompts, sleep/wake, cross-network TURN, and audible output-device routing remain manual; automated tests cannot prove those behaviors. For the sharing indicator, verify a full display, crop, and moving/resizing window on physical Macs; switch sources, stop via macOS, and end the call, checking that the border matches the transmitted area and clears correctly.
 
 ## Project map
 

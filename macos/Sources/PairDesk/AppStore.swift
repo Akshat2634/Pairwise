@@ -6,11 +6,11 @@ import SwiftUI
 
 @MainActor
 final class AppStore: ObservableObject {
-    @Published var user: TeamUser?
+    @Published var user: TeamUser? { didSet { updateCallAudio() } }
     @Published var users: [TeamUser] = []
     @Published var adminUsers: [TeamUser] = []
     @Published var rooms: [PairRoom] = []
-    @Published var callInvitations: [CallInvitation] = []
+    @Published var callInvitations: [CallInvitation] = [] { didSet { updateCallAudio() } }
     @Published var joinRequests: [CallJoinRequest] = []
     @Published var activeTeamCalls: [PairRoom] = []
     /// One-line call status clears itself instead of leaking into the next call.
@@ -25,7 +25,10 @@ final class AppStore: ObservableObject {
         didSet { UserDefaults.standard.set(startCallsMuted, forKey: "startCallsMuted") }
     }
     @Published var playCallSounds = (UserDefaults.standard.object(forKey: "playCallSounds") as? Bool) ?? true {
-        didSet { UserDefaults.standard.set(playCallSounds, forKey: "playCallSounds") }
+        didSet {
+            UserDefaults.standard.set(playCallSounds, forKey: "playCallSounds")
+            updateCallAudio()
+        }
     }
     let rtc = RTCService()
     let transcripts = WhisperTranscriber()
@@ -40,6 +43,8 @@ final class AppStore: ObservableObject {
     private var attentionRequest: Int?
     private var autoVoiceCallID: String?
     private var invitationPollSequence = 0
+    private let callAudio: CallAudioFeedback
+    private var mediaCallConnected = false
 
     var incomingCall: CallInvitation? { callInvitations.first { $0.status == "pending" && $0.target.id == user?.id } }
     var outgoingCalls: [CallInvitation] { callInvitations.filter { $0.status == "pending" && $0.caller.id == user?.id } }
@@ -64,7 +69,13 @@ final class AppStore: ObservableObject {
 
     var api: APIClient { get throws { try APIClient(server: serverAddress, token: token) } }
 
-    init() {
+    init(callAudio: CallAudioFeedback? = nil) {
+        self.callAudio = callAudio ?? CallAudioFeedback()
+        rtc.$connected.combineLatest(rtc.$participants).sink { [weak self] connected, participants in
+            guard let self else { return }
+            self.mediaCallConnected = connected && participants.contains { !$0.isLocal }
+            self.updateCallAudio()
+        }.store(in: &subscriptions)
         rtc.$connected.dropFirst().sink { [weak self] connected in
             guard let self, !connected, self.activeRoom != nil else { return }
             Task { await self.leave() }
@@ -89,6 +100,19 @@ final class AppStore: ObservableObject {
             }
         }
     }
+
+    private func updateCallAudio() {
+        callAudio.update(incomingID: incomingCall?.id, connected: mediaCallConnected, enabled: playCallSounds)
+    }
+
+    #if DEBUG
+    /// Isolated integration clients must never read or overwrite the person's saved session.
+    func debugUseSession(user: TeamUser, token: String, server: String) {
+        serverAddress = server
+        self.token = token
+        self.user = user
+    }
+    #endif
 
     func restore() async {
         guard !restoringSession, user == nil else { return }
@@ -136,6 +160,7 @@ final class AppStore: ObservableObject {
         generation += 1
         refreshTask?.cancel()
         callRefreshTask?.cancel()
+        callAudio.update(incomingID: nil, connected: false, enabled: false)
         await leave()
         try? await api.send("v1/logout", body: EmptyBody())
         SessionVault.clear()
@@ -221,7 +246,6 @@ final class AppStore: ObservableObject {
             if let activeCallsValue { activeTeamCalls = activeCallsValue.calls }
             observedCallStatuses = Dictionary(uniqueKeysWithValues: response.calls.map { ($0.id, $0.status) })
             if let incoming = incomingCall, oldStatuses[incoming.id] == nil {
-                if playCallSounds { NSSound(named: NSSound.Name("Glass"))?.play() }
                 attentionRequest = NSApp.requestUserAttention(.criticalRequest)
             }
             if incomingCall == nil, let attentionRequest {
@@ -341,11 +365,19 @@ final class AppStore: ObservableObject {
         guard !busy, activeRoom == nil else { return }
         busy = true
         defer { busy = false }
+        invitationPollSequence += 1
+        callAudio.silenceIncoming(invitation.id)
         do {
             let response: CallResponse = try await api.post("v1/calls/\(invitation.id)/accept", body: EmptyBody())
+            callInvitations.removeAll { $0.id == invitation.id }
+            callInvitations.append(response.call)
             await joinInternal(response.call.room)
             if activeRoom != nil && !startCallsMuted { try await rtc.setMicrophoneEnabled(true) }
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            self.error = error.localizedDescription
+            callAudio.retryIncoming()
+            updateCallAudio()
+        }
         await refreshInvitations()
     }
 
@@ -356,8 +388,14 @@ final class AppStore: ObservableObject {
 
     func declineCall(_ invitation: CallInvitation) async {
         guard !busy else { return }
+        invitationPollSequence += 1
+        callAudio.silenceIncoming(invitation.id)
         do { try await api.send("v1/calls/\(invitation.id)/decline", body: EmptyBody()); await refreshInvitations() }
-        catch { self.error = error.localizedDescription }
+        catch {
+            self.error = error.localizedDescription
+            callAudio.retryIncoming()
+            updateCallAudio()
+        }
     }
 
     func cancelCall(_ invitation: CallInvitation) async {
