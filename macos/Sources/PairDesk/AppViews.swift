@@ -139,7 +139,7 @@ struct SharedScreenWindow: View {
                 if rtc.isSharing { Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy) }
                 Button { showTranscript.toggle() } label: { Image(systemName: "text.bubble") }.help("Local transcript")
                 Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
-                Button("Hang up") { Task { await store.leave(playSound: true) } }.tint(.red)
+                Button("Hang up") { Task { await store.leave() } }.tint(.red)
             }.buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 9)
             HStack(spacing: 0) {
                 ZStack {
@@ -251,26 +251,43 @@ struct ScreenSharePickerView: View {
     @ObservedObject private var screenPermission = PermissionManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var permissions = false
+    @State private var source: ScreenShareSource = .display
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Share your screen").font(.title2.bold())
-            Text("Choose a display in the macOS picker. PairDesk receives access only to that display for this sharing session; Screen Recording permission is not required.").font(.callout).foregroundStyle(.secondary)
-            Label("Remote mouse and keyboard control needs Accessibility access on the Mac being shared. Screen sharing still works without it.", systemImage: "cursorarrow.motionlines")
-                .font(.caption).foregroundStyle(.secondary)
-            if !screenPermission.accessibility {
-                Button("Set up remote control") { screenPermission.requestAccessibility() }
+            Picker("What to share", selection: $source) {
+                ForEach(ScreenShareSource.allCases) { source in Text(source.title).tag(source) }
+            }.pickerStyle(.segmented)
+            Text(source.explanation + " PairDesk only gets access to your selection for this sharing session.").font(.callout).foregroundStyle(.secondary)
+            if source == .window {
+                Text("Window sharing is view-only. Share a display or region to use remote control.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Label("Remote mouse and keyboard control needs Accessibility access on the Mac being shared. Screen sharing still works without it.", systemImage: "cursorarrow.motionlines")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !screenPermission.accessibility {
+                    Button("Set up remote control") { screenPermission.requestAccessibility() }
+                }
             }
             Spacer()
-            HStack { Button("Permissions") { permissions = true }; Spacer(); Button("Cancel") { dismiss(); AppWindows.shared.close("share") }; Button("Choose display…") { beginSharing() }.buttonStyle(.borderedProminent).disabled(store.busy) }
+            HStack {
+                Button("Permissions") { permissions = true }
+                Spacer()
+                Button("Cancel") { dismiss(); AppWindows.shared.close("share") }
+                    .keyboardShortcut(.cancelAction)
+                Button("Choose \(source == .window ? "window" : "display")…") { beginSharing() }
+                    .buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.defaultAction).disabled(store.busy)
+            }
         }.padding(26).frame(width: 560)
         .task { screenPermission.refresh() }
         .sheet(isPresented: $permissions) { PermissionsView() }
     }
 
     private func beginSharing() {
+        let chosenSource = source
         dismiss()
         AppWindows.shared.close("share")
-        Task { await store.shareScreen() }
+        Task { await store.shareScreen(source: chosenSource) }
     }
 }
 

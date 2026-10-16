@@ -6,16 +6,16 @@ import SwiftUI
 
 @MainActor
 final class AppStore: ObservableObject {
-    @Published var user: TeamUser?
+    @Published var user: TeamUser? { didSet { updateCallAudio() } }
     @Published var users: [TeamUser] = []
     @Published var adminUsers: [TeamUser] = []
     @Published var rooms: [PairRoom] = []
-    @Published var callInvitations: [CallInvitation] = []
+    @Published var callInvitations: [CallInvitation] = [] { didSet { updateCallAudio() } }
     @Published var joinRequests: [CallJoinRequest] = []
     @Published var activeTeamCalls: [PairRoom] = []
     /// One-line call status clears itself instead of leaking into the next call.
     @Published var callMessage: String? { didSet { scheduleCallMessageExpiry() } }
-    @Published var activeRoom: PairRoom?
+    @Published var activeRoom: PairRoom? { didSet { updateCallAudio() } }
     @Published var callStartedAt: Date?
     @Published var busy = false
     @Published var error: String?
@@ -25,13 +25,17 @@ final class AppStore: ObservableObject {
         didSet { UserDefaults.standard.set(startCallsMuted, forKey: "startCallsMuted") }
     }
     @Published var playCallSounds = (UserDefaults.standard.object(forKey: "playCallSounds") as? Bool) ?? true {
-        didSet { UserDefaults.standard.set(playCallSounds, forKey: "playCallSounds") }
+        didSet {
+            UserDefaults.standard.set(playCallSounds, forKey: "playCallSounds")
+            updateCallAudio()
+        }
     }
     let rtc = RTCService()
     let transcripts = WhisperTranscriber()
     private var subscriptions = Set<AnyCancellable>()
     private var hadRemoteParticipant = false
     private var restoringSession = false
+    private var persistsSession = true
     private var token: String?
     private var refreshTask: Task<Void, Never>?
     private var callRefreshTask: Task<Void, Never>?
@@ -40,6 +44,8 @@ final class AppStore: ObservableObject {
     private var attentionRequest: Int?
     private var autoVoiceCallID: String?
     private var invitationPollSequence = 0
+    private let callAudio: CallAudioFeedback
+    private var mediaCallConnected = false
 
     var incomingCall: CallInvitation? { callInvitations.first { $0.status == "pending" && $0.target.id == user?.id } }
     var outgoingCalls: [CallInvitation] { callInvitations.filter { $0.status == "pending" && $0.caller.id == user?.id } }
@@ -64,7 +70,13 @@ final class AppStore: ObservableObject {
 
     var api: APIClient { get throws { try APIClient(server: serverAddress, token: token) } }
 
-    init() {
+    init(callAudio: CallAudioFeedback? = nil) {
+        self.callAudio = callAudio ?? CallAudioFeedback()
+        rtc.$connected.combineLatest(rtc.$participants).sink { [weak self] connected, participants in
+            guard let self else { return }
+            self.mediaCallConnected = connected && participants.contains { !$0.isLocal }
+            self.updateCallAudio()
+        }.store(in: &subscriptions)
         rtc.$connected.dropFirst().sink { [weak self] connected in
             guard let self, !connected, self.activeRoom != nil else { return }
             Task { await self.leave() }
@@ -90,8 +102,31 @@ final class AppStore: ObservableObject {
         }
     }
 
+    private func updateCallAudio() {
+        // A matching room means the caller joined successfully. Leaving clears
+        // it immediately, so stale pending polls cannot restart ringback. Once
+        // a peer has joined, old pending invitations must also stay silent.
+        let outgoingID = hadRemoteParticipant ? nil : outgoingCalls.first { $0.room.id == activeRoom?.id }?.id
+        callAudio.update(incomingID: incomingCall?.id, outgoingID: outgoingID,
+                         connected: mediaCallConnected, enabled: playCallSounds)
+    }
+
+    private func clearSavedSession() {
+        if persistsSession { SessionVault.clear() }
+    }
+
+    #if DEBUG
+    /// Isolated integration clients must never read or overwrite the person's saved session.
+    func debugUseSession(user: TeamUser, token: String, server: String) {
+        persistsSession = false
+        serverAddress = server
+        self.token = token
+        self.user = user
+    }
+    #endif
+
     func restore() async {
-        guard !restoringSession, user == nil else { return }
+        guard persistsSession, !restoringSession, user == nil else { return }
         restoringSession = true
         busy = true
         defer { busy = false; restoringSession = false }
@@ -104,7 +139,7 @@ final class AppStore: ObservableObject {
             startRefresh()
         } catch {
             if (error as? APIError)?.status == 401 {
-                SessionVault.clear()
+                clearSavedSession()
                 token = nil
             }
             self.error = error.localizedDescription
@@ -121,7 +156,9 @@ final class AppStore: ObservableObject {
             let client = try APIClient(server: serverAddress)
             let response: LoginResponse = try await client.post("v1/login", body: Body(email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password))
             let saved = SavedSession(token: response.token, server: serverAddress)
-            try await Task.detached(priority: .userInitiated) { try SessionVault.save(saved) }.value
+            if persistsSession {
+                try await Task.detached(priority: .userInitiated) { try SessionVault.save(saved) }.value
+            }
             token = response.token
             user = response.user
             UserDefaults.standard.set(serverAddress, forKey: "serverAddress")
@@ -136,9 +173,11 @@ final class AppStore: ObservableObject {
         generation += 1
         refreshTask?.cancel()
         callRefreshTask?.cancel()
+        invitationPollSequence += 1
+        callInvitations = []
         await leave()
         try? await api.send("v1/logout", body: EmptyBody())
-        SessionVault.clear()
+        clearSavedSession()
         token = nil
         user = nil
         users = []
@@ -195,7 +234,7 @@ final class AppStore: ObservableObject {
                 refreshTask?.cancel()
                 callRefreshTask?.cancel()
                 await leave()
-                SessionVault.clear()
+                clearSavedSession()
                 token = nil
                 user = nil
                 self.error = "Your session has expired. Sign in again."
@@ -221,7 +260,6 @@ final class AppStore: ObservableObject {
             if let activeCallsValue { activeTeamCalls = activeCallsValue.calls }
             observedCallStatuses = Dictionary(uniqueKeysWithValues: response.calls.map { ($0.id, $0.status) })
             if let incoming = incomingCall, oldStatuses[incoming.id] == nil {
-                if playCallSounds { NSSound(named: NSSound.Name("Glass"))?.play() }
                 attentionRequest = NSApp.requestUserAttention(.criticalRequest)
             }
             if incomingCall == nil, let attentionRequest {
@@ -341,11 +379,19 @@ final class AppStore: ObservableObject {
         guard !busy, activeRoom == nil else { return }
         busy = true
         defer { busy = false }
+        invitationPollSequence += 1
+        callAudio.silenceIncoming(invitation.id)
         do {
             let response: CallResponse = try await api.post("v1/calls/\(invitation.id)/accept", body: EmptyBody())
+            callInvitations.removeAll { $0.id == invitation.id }
+            callInvitations.append(response.call)
             await joinInternal(response.call.room)
             if activeRoom != nil && !startCallsMuted { try await rtc.setMicrophoneEnabled(true) }
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            self.error = error.localizedDescription
+            callAudio.retryIncoming()
+            updateCallAudio()
+        }
         await refreshInvitations()
     }
 
@@ -356,8 +402,16 @@ final class AppStore: ObservableObject {
 
     func declineCall(_ invitation: CallInvitation) async {
         guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        invitationPollSequence += 1
+        callAudio.silenceIncoming(invitation.id)
         do { try await api.send("v1/calls/\(invitation.id)/decline", body: EmptyBody()); await refreshInvitations() }
-        catch { self.error = error.localizedDescription }
+        catch {
+            self.error = error.localizedDescription
+            callAudio.retryIncoming()
+            updateCallAudio()
+        }
     }
 
     func cancelCall(_ invitation: CallInvitation) async {
@@ -424,7 +478,7 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func leave(playSound: Bool = false) async {
+    func leave() async {
         transcripts.setEnabled(false)
         transcripts.clear()
         hadRemoteParticipant = false
@@ -434,16 +488,15 @@ final class AppStore: ObservableObject {
         screenClaimRoomID = nil
         await rtc.disconnect()
         if let room { try? await api.send("v1/rooms/\(room.id)/leave", body: EmptyBody()) }
-        if room != nil, playSound, playCallSounds { NSSound(named: NSSound.Name("Pop"))?.play() }
     }
 
-    func shareScreen() async {
+    func shareScreen(source: ScreenShareSource = .display) async {
         guard !busy, let room = activeRoom else { return }
         busy = true
         defer { busy = false }
         struct Body: Encodable { let enabled: Bool }
         do {
-            let selection = try await SystemScreenPicker.shared.chooseSource()
+            let selection = try await SystemScreenPicker.shared.chooseSource(source)
             try await api.send("v1/rooms/\(room.id)/share", body: Body(enabled: true))
             screenClaimRoomID = room.id
             try await rtc.startScreenShare(contentFilter: selection.filter, sourceRect: selection.sourceRect)
@@ -453,13 +506,13 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func changeScreenSource() async {
+    func changeScreenSource(source: ScreenShareSource = .display) async {
         guard !busy, let room = activeRoom, rtc.isSharing else { return }
         busy = true
         defer { busy = false }
         do {
             // Pick first so canceling leaves the current share untouched.
-            let selection = try await SystemScreenPicker.shared.chooseSource()
+            let selection = try await SystemScreenPicker.shared.chooseSource(source)
             await rtc.stopScreenShare()
             guard !rtc.isSharing else { throw APIError(status: 0, message: "The current screen share could not be stopped safely.") }
             try await rtc.startScreenShare(contentFilter: selection.filter, sourceRect: selection.sourceRect)

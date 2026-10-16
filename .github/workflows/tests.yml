@@ -1,0 +1,47 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.6'
+          cache-dependency-path: server/go.sum
+      - name: Native macOS tests
+        working-directory: macos
+        run: swift test -j 4
+      - name: Build pinned LiveKit test server
+        run: GOBIN="$RUNNER_TEMP/livekit-bin" go install github.com/livekit/livekit-server/cmd/server@v1.8.4
+      - name: App call and media end-to-end tests
+        env:
+          PAIRDESK_TEST_MEDIA_URL: ws://127.0.0.1:7880
+          PAIRDESK_TEST_MEDIA_API_URL: http://127.0.0.1:7880
+        run: |
+          set -eu
+          sh infra/setup.sh
+          "$RUNNER_TEMP/livekit-bin/server" --config infra/livekit.yaml > "$RUNNER_TEMP/livekit.log" 2>&1 &
+          MEDIA_PID=$!
+          trap 'kill "$MEDIA_PID" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:7880 > /dev/null; then break; fi
+            sleep 1
+          done
+          sh scripts/test-call.sh
+      - name: Server race tests and vet
+        working-directory: server
+        run: go test -race ./... && go vet ./...

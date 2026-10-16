@@ -31,10 +31,12 @@ private struct ViewerQualityFeedback {
 
 /// Owns one LiveKit room, local media and the consented remote-control lease.
 @MainActor
-final class RTCService: NSObject, ObservableObject, RoomDelegate {
+final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerDelegate {
     @Published private(set) var connected = false
     @Published private(set) var isMicrophoneEnabled = false
-    @Published private(set) var isSharing = false
+    @Published private(set) var isSharing = false {
+        didSet { if !isSharing { sharingIndicator.hide() } }
+    }
     @Published private(set) var participants: [CallParticipant] = []
     @Published private(set) var screenTrack: VideoTrack?
     @Published private(set) var status = "Disconnected"
@@ -52,8 +54,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     var usesIndependentCursors: Bool { !isSharing && cursorSessionID != nil }
     var canPointAtRemoteScreen: Bool { connected && !isSharing && screenTrack != nil && activeSharerIdentity != nil }
     @Published private(set) var localIdentity: String?
-    @Published private(set) var audioInputDevices: [AudioDevice] = []
-    @Published private(set) var audioOutputDevices: [AudioDevice] = []
+    @Published private(set) var audioInputDevices: [AudioDeviceChoice] = []
+    @Published private(set) var audioOutputDevices: [AudioDeviceChoice] = []
     @Published private(set) var selectedAudioInputID = ""
     @Published private(set) var selectedAudioOutputID = ""
     @Published private(set) var savedAudioInputUnavailable = false
@@ -83,6 +85,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     private var adaptiveShareController: AdaptiveShareController?
     private var adaptiveQualityTask: Task<Void, Never>?
     private var isStartingShare = false
+    private var isStoppingShare = false
+    private let sharingIndicator = ScreenShareIndicator()
     private var accessibilityMonitorTask: Task<Void, Never>?
     private var remoteControlManuallyPaused = false
     private var resumeControlAfterReconnect = false
@@ -238,7 +242,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         controlTransportFailed = true
         if let room {
             detachAudioRenderers()
-            _ = try? await room.localParticipant.setMicrophone(enabled: false)
+            // Room teardown stops every local track, including the microphone.
             await room.disconnect()
         }
         self.room = nil
@@ -287,7 +291,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         selectedAudioInputID = device.deviceId
         UserDefaults.standard.set(device.deviceId, forKey: "audioInputDeviceID")
         savedAudioInputUnavailable = false
-        audioInputDevices = AudioManager.shared.inputDevices
+        audioInputDevices = Self.audioDeviceChoices(AudioManager.shared.inputDevices)
     }
 
     func selectAudioOutput(_ deviceID: String) {
@@ -296,7 +300,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         selectedAudioOutputID = device.deviceId
         UserDefaults.standard.set(device.deviceId, forKey: "audioOutputDeviceID")
         savedAudioOutputUnavailable = false
-        audioOutputDevices = AudioManager.shared.outputDevices
+        audioOutputDevices = Self.audioDeviceChoices(AudioManager.shared.outputDevices)
     }
 
     private func refreshAudioDevices(using manager: AudioManager = .shared) {
@@ -318,10 +322,16 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                 savedAudioOutputUnavailable = true
             }
         }
-        audioInputDevices = inputs
-        audioOutputDevices = outputs
+        audioInputDevices = Self.audioDeviceChoices(inputs)
+        audioOutputDevices = Self.audioDeviceChoices(outputs)
         selectedAudioInputID = manager.inputDevice.deviceId
         selectedAudioOutputID = manager.outputDevice.deviceId
+    }
+
+    private static func audioDeviceChoices(_ devices: [AudioDevice]) -> [AudioDeviceChoice] {
+        AudioDeviceChoice.unique(devices.map {
+            AudioDeviceChoice(id: $0.deviceId, name: $0.name, isDefault: $0.isDefault)
+        })
     }
 
     func refreshScreenNetworkQuality() {
@@ -549,7 +559,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
                                                                                          maxFps: quality.framesPerSecond),
                                                      simulcast: false)
             _ = try await room.localParticipant.publish(videoTrack: track, options: publishOptions)
+            guard self.room === room, connected else {
+                _ = try? await track.capturer.stopCapture()
+                throw LiveKitError(.invalidState, message: "The call ended while screen sharing was starting.")
+            }
             shareTrack = track
+            track.capturer.add(delegate: self)
             shareBounds = selectedWindow ? nil : selectedFrame
             cursorSessionID = selectedFrame == nil ? nil : UUID().uuidString
             shareIsWindow = selectedWindow
@@ -561,6 +576,17 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
             adaptiveShareStatus = adaptiveQualityEnabled ? "Auto · \(adaptiveShareController?.current.title ?? quality.title)" : nil
             screenTrack = track
             isSharing = true
+            if #available(macOS 15.2, *), selectedWindow, let window = contentFilter.includedWindows.first {
+                sharingIndicator.show(.window(window.windowID))
+            } else if !selectedWindow {
+                let displayID: CGDirectDisplayID?
+                if #available(macOS 15.2, *) {
+                    displayID = contentFilter.includedDisplays.first?.displayID
+                } else if NSScreen.screens.count == 1 {
+                    displayID = (NSScreen.screens.first?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+                } else { displayID = nil }
+                if let displayID { sharingIndicator.show(.display(displayID, crop: sourceRect)) }
+            }
             activeSharerIdentity = localIdentity
             controlState = .host
             status = selectedWindow
@@ -579,7 +605,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
     }
 
     func stopScreenShare() async {
-        guard let room, let track = shareTrack else { return }
+        guard !isStoppingShare, let room, let track = shareTrack else { return }
+        isStoppingShare = true
+        defer { isStoppingShare = false }
         adaptiveQualityTask?.cancel()
         adaptiveQualityTask = nil
         adaptiveShareController = nil
@@ -589,7 +617,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         revokeControl()
         resetIndependentCursors()
         guard let publication = room.localParticipant.localVideoTracks.first(where: { $0.track === track }) else {
-            _ = try? await track.capturer.stopCapture()
+            do { _ = try await track.capturer.stopCapture() }
+            catch { self.error = error.localizedDescription; return }
             shareTrack = nil
             screenTrack = nil
             shareBounds = nil
@@ -604,9 +633,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         do { try await room.localParticipant.unpublish(publication: publication) }
         catch {
             self.error = "Could not stop screen sharing cleanly: \(error.localizedDescription)"
-            _ = try? await track.capturer.stopCapture()
             remoteControlAvailable = false
-            return
+            do { _ = try await track.capturer.stopCapture() }
+            catch { return }
         }
         shareTrack = nil
         screenTrack = nil
@@ -618,6 +647,26 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate {
         if activeSharerIdentity == localIdentity { activeSharerIdentity = nil }
         controlState = .viewer
         status = "Screen sharing stopped"
+    }
+
+    nonisolated func capturer(_ capturer: VideoCapturer, didUpdate state: VideoCapturer.CapturerState) {
+        guard state == .stopped else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.shareTrack?.capturer === capturer else { return }
+            // Includes the macOS Stop Sharing control and capture failures.
+            self.sharingIndicator.hide()
+            self.revokeControl()
+            // LiveKit already unpublishes stopped screen capturers. Finish
+            // local cleanup in didUnpublishTrack instead of racing that request.
+        }
+    }
+
+    nonisolated func room(_ room: Room, participant: LocalParticipant, didUnpublishTrack publication: LocalTrackPublication) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room,
+                  let track = self.shareTrack, publication.track === track else { return }
+            await self.stopScreenShare()
+        }
     }
 
     func requestControl() {
