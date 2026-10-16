@@ -42,28 +42,6 @@ jobs:
             sleep 1
           done
           sh scripts/test-call.sh
-      - name: Print sanitized native crash stack
-        if: failure()
-        run: |
-          sleep 5
-          python3 - <<'PY'
-          import json, pathlib
-          for directory in [pathlib.Path.home() / 'Library/Logs/DiagnosticReports', pathlib.Path('/Library/Logs/DiagnosticReports')]:
-              for pattern in ['xctest*.ips', 'PairDesk*.ips']:
-                  for report in directory.glob(pattern):
-                      try:
-                          raw = report.read_text()
-                          # The first JSON record is machine/report metadata. Never print it.
-                          _, end = json.JSONDecoder().raw_decode(raw)
-                          crash = json.loads(raw[end:])
-                          for thread in crash.get('threads', []):
-                              if thread.get('triggered'):
-                                  print('Native test crash: function names only')
-                                  for frame in thread.get('frames', [])[:40]:
-                                      print(frame.get('symbol', '(unsymbolicated)'))
-                      except (ValueError, OSError):
-                          print('Native test crash stack unavailable')
-          PY
       - name: Server race tests and vet
         working-directory: server
         run: go test -race ./... && go vet ./...

@@ -242,7 +242,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         controlTransportFailed = true
         if let room {
             detachAudioRenderers()
-            _ = try? await room.localParticipant.setMicrophone(enabled: false)
+            // Room teardown stops every local track, including the microphone.
             await room.disconnect()
         }
         self.room = nil
