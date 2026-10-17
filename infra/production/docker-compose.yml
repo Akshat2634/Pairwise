@@ -31,8 +31,17 @@ services:
       LIVEKIT_API_URL: http://livekit:7880
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?run configure.py}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?run configure.py}
+      PAIRDESK_APNS_TEAM_ID: ${PAIRDESK_APNS_TEAM_ID:-}
+      PAIRDESK_APNS_KEY_ID: ${PAIRDESK_APNS_KEY_ID:-}
+      PAIRDESK_APNS_TOPIC: ${PAIRDESK_APNS_TOPIC:-}
+      PAIRDESK_APNS_PRIVATE_KEY_FILE: /run/secrets/pairdesk-apns-auth-key
+      PAIRDESK_APNS_HOST: ${PAIRDESK_APNS_HOST:-https://api.push.apple.com}
+      PAIRDESK_FCM_PROJECT_ID: ${PAIRDESK_FCM_PROJECT_ID:-}
+      PAIRDESK_FCM_SERVICE_ACCOUNT_FILE: /run/secrets/pairdesk-fcm-service-account.json
     volumes:
       - pairdesk-data:/data
+      - ${PAIRDESK_APNS_PRIVATE_KEY_HOST_FILE:-/dev/null}:/run/secrets/pairdesk-apns-auth-key:ro
+      - ${PAIRDESK_FCM_SERVICE_ACCOUNT_HOST_FILE:-/dev/null}:/run/secrets/pairdesk-fcm-service-account.json:ro
     restart: unless-stopped
     depends_on: [livekit]
 volumes:

@@ -21,7 +21,8 @@ PairDesk — internal macOS pairing app
    macOS may require approval in System Settings > General > Login Items.
 5. For calls, allow microphone access when requested. To share, choose a
    display in the macOS screen-sharing picker; no Screen Recording setting is
-   needed. To let teammates control your Mac, enable PairDesk in Accessibility.
+   needed. Camera video is optional; allow camera access when you turn it on.
+   To let teammates control your Mac, enable PairDesk in Accessibility.
 6. PairDesk lives in the top-right menu bar. Click its icon to call an online
    teammate; they accept. Click another available teammate to add them.
    Share screen opens Apple's system picker. A shared display allows call
@@ -36,8 +37,9 @@ notarized release is ready for normal team distribution. If macOS blocks
 opening it, ask your administrator for the signed release. Do not disable
 Gatekeeper or remove quarantine as a substitute for signing.
 
-Voice and screen only. Transcription is optional and local. Startup does
-not activate microphone, sharing, remote control or transcription.
+Voice, optional camera video, and screen sharing. Transcription is optional
+and local. Startup does not activate the microphone, camera, sharing, remote
+control or transcription.
 TEXT
 hdiutil create -volname PairDesk -srcfolder "$STAGING" -format UDZO "$OUTPUT"
 hdiutil verify "$OUTPUT"

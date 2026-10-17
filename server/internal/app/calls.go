@@ -164,6 +164,7 @@ func (s *Server) createCall(w http.ResponseWriter, r *http.Request, u User) {
 		fail(w, 500, "internal error")
 		return
 	}
+	s.notify([]string{target.ID}, "direct_call", invite.ID, invite.ExpiresAt)
 	writeJSON(w, http.StatusCreated, map[string]any{"call": s.callSnapshotLocked(invite, now)})
 }
 func (s *Server) callAction(w http.ResponseWriter, r *http.Request, u User) {
