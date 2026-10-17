@@ -555,7 +555,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             var captureFilter = contentFilter
             if let selectedFrame, let displayID, !selectedWindow {
                 hostCursorOverlay.prepare(captureBounds: selectedFrame)
-                captureFilter = try await hostCursorOverlay.captureFilter(from: contentFilter, displayID: displayID)
+                let exclusionFilter = try await hostCursorOverlay.captureFilter(from: contentFilter, displayID: displayID)
+                captureFilter = exclusionFilter ?? contentFilter
             }
             let canControlDisplay = selectedFrame != nil && AXIsProcessTrusted()
             // Older viewers infer view-only from the ".window" suffix; newer

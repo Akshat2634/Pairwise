@@ -38,18 +38,36 @@ final class HostCursorOverlay {
 
     /// The picker selects a complete display; retain that display and crop while
     /// excluding our own overlay so viewers don't receive duplicate cursors.
-    func captureFilter(from selection: SCContentFilter, displayID: CGDirectDisplayID) async throws -> SCContentFilter {
-        guard let panel, selection.style == .display, #available(macOS 14.4, *) else { return selection }
-        let owned = try await Self.currentProcessContent()
+    func captureFilter(from selection: SCContentFilter, displayID: CGDirectDisplayID,
+                       exclusionSupported: Bool = true) async throws -> SCContentFilter? {
+        // Keep the normal screen share available on systems where the picker
+        // doesn't expose enough metadata to exclude our own overlay. In that
+        // case the host-side overlay must stay hidden: the picker filter includes
+        // the whole display and would otherwise transmit the cursors in-band.
+        guard exclusionSupported, let panel, selection.style == .display, #available(macOS 14.4, *) else {
+            hide()
+            return nil
+        }
+        let owned: SCShareableContent
+        do {
+            owned = try await Self.currentProcessContent()
+        } catch {
+            hide()
+            return nil
+        }
         guard self.panel === panel else { throw CancellationError() }
         let display: SCDisplay?
         if #available(macOS 15.2, *) { display = selection.includedDisplays.first { $0.displayID == displayID } }
         else { display = owned.displays.first { $0.displayID == displayID } }
         // Before 15.2 a picker-only grant may redact display information. Keep
         // the authorized filter and the legacy window sharing type in that case.
-        guard let display, display.width > 0, display.height > 0 else { return selection }
+        guard let display, display.width > 0, display.height > 0 else {
+            hide()
+            return nil
+        }
         guard let window = owned.windows.first(where: { $0.windowID == CGWindowID(panel.windowNumber) }) else {
-            throw CocoaError(.coderValueNotFound, userInfo: [NSLocalizedDescriptionKey: "Could not exclude the local cursor overlay from this display."])
+            hide()
+            return nil
         }
         let filter = SCContentFilter(display: display, excludingWindows: [window])
         filter.includeMenuBar = selection.includeMenuBar

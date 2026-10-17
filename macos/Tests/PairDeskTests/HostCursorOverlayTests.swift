@@ -57,12 +57,57 @@ final class HostCursorOverlayTests: XCTestCase {
         if #available(macOS 15.2, *), let display = content.displays.first(where: { $0.width > 0 && $0.height > 0 }) {
             let selection = SCContentFilter(display: display, excludingWindows: [])
             selection.includeMenuBar = true
-            let filtered = try await overlay.captureFilter(from: selection, displayID: display.displayID)
+            let filterResult = try await overlay.captureFilter(from: selection, displayID: display.displayID)
+            let filtered = try XCTUnwrap(filterResult)
             XCTAssertEqual(filtered.includedDisplays.map(\.displayID), [display.displayID])
             XCTAssertEqual(filtered.contentRect, selection.contentRect)
             XCTAssertTrue(filtered.includeMenuBar)
             XCTAssertFalse(filtered.includedWindows.contains { $0.windowID == CGWindowID(panel.windowNumber) })
         }
+    }
+
+    func testWhenCaptureExclusionIsUnavailableKeepPickerFilterAndHideHostOverlay() async throws {
+        guard #available(macOS 14.4, *) else { throw XCTSkip("Capture exclusion lookup requires macOS 14.4") }
+        _ = NSApplication.shared
+        let content = try await HostCursorOverlay.currentProcessContent()
+        guard let display = content.displays.first(where: { $0.width > 0 && $0.height > 0 }) else {
+            throw XCTSkip("The current-process display list is redacted on this system")
+        }
+        let pickerFilter = SCContentFilter(display: display, excludingWindows: [])
+        let overlay = HostCursorOverlay()
+        defer { overlay.hide() }
+        overlay.prepare(captureBounds: CGDisplayBounds(display.displayID))
+        XCTAssertNotNil(overlay.panel)
+
+        let exclusionFilter = try await overlay.captureFilter(from: pickerFilter,
+                                                              displayID: display.displayID,
+                                                              exclusionSupported: false)
+
+        XCTAssertNil(exclusionFilter)
+        XCTAssertNil(overlay.panel, "The host overlay must be disabled when it cannot be excluded from capture")
+        XCTAssertTrue((exclusionFilter ?? pickerFilter) === pickerFilter,
+                      "The user's authorized picker filter remains available for screen sharing")
+    }
+
+    func testWhenPickerOmitsSelectedDisplayHideHostOverlayAndKeepPickerFilter() async throws {
+        guard #available(macOS 14.4, *) else { throw XCTSkip("Capture exclusion lookup requires macOS 14.4") }
+        _ = NSApplication.shared
+        let content = try await HostCursorOverlay.currentProcessContent()
+        guard let display = content.displays.first(where: { $0.width > 0 && $0.height > 0 }) else {
+            throw XCTSkip("The current-process display list is redacted on this system")
+        }
+        let pickerFilter = SCContentFilter(display: display, excludingWindows: [])
+        let overlay = HostCursorOverlay()
+        defer { overlay.hide() }
+        overlay.prepare(captureBounds: CGDisplayBounds(display.displayID))
+
+        let unavailableID = CGDirectDisplayID.max
+        XCTAssertFalse(content.displays.contains { $0.displayID == unavailableID })
+        let exclusionFilter = try await overlay.captureFilter(from: pickerFilter, displayID: unavailableID)
+
+        XCTAssertNil(exclusionFilter)
+        XCTAssertNil(overlay.panel, "A redacted or unmatched picker display must not leave the host overlay visible")
+        XCTAssertTrue((exclusionFilter ?? pickerFilter) === pickerFilter)
     }
 
 }
