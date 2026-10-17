@@ -52,13 +52,22 @@ type CallJoinRequest struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 	ExpiresAt   time.Time `json:"expiresAt"`
 }
+type DeviceRegistration struct {
+	UserID    string    `json:"userId"`
+	DeviceID  string    `json:"deviceId"`
+	Platform  string    `json:"platform"`
+	PushToken string    `json:"pushToken,omitempty"`
+	VoIPToken string    `json:"voipToken,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
 type State struct {
-	Users        map[string]User            `json:"users"`
-	Sessions     map[string]Session         `json:"sessions"`
-	Rooms        map[string]Room            `json:"rooms"`
-	Presence     map[string]time.Time       `json:"presence"`
-	Calls        map[string]CallInvitation  `json:"calls"`
-	JoinRequests map[string]CallJoinRequest `json:"joinRequests,omitempty"`
+	Users        map[string]User               `json:"users"`
+	Sessions     map[string]Session            `json:"sessions"`
+	Rooms        map[string]Room               `json:"rooms"`
+	Presence     map[string]time.Time          `json:"presence"`
+	Calls        map[string]CallInvitation     `json:"calls"`
+	JoinRequests map[string]CallJoinRequest    `json:"joinRequests,omitempty"`
+	Devices      map[string]DeviceRegistration `json:"devices,omitempty"`
 }
 type Store struct {
 	mu   sync.Mutex
@@ -67,7 +76,7 @@ type Store struct {
 }
 
 func OpenStore(path string) (*Store, error) {
-	st := &Store{path: path, s: State{Users: map[string]User{}, Sessions: map[string]Session{}, Rooms: map[string]Room{}, Presence: map[string]time.Time{}, Calls: map[string]CallInvitation{}, JoinRequests: map[string]CallJoinRequest{}}}
+	st := &Store{path: path, s: State{Users: map[string]User{}, Sessions: map[string]Session{}, Rooms: map[string]Room{}, Presence: map[string]time.Time{}, Calls: map[string]CallInvitation{}, JoinRequests: map[string]CallJoinRequest{}, Devices: map[string]DeviceRegistration{}}}
 	b, e := os.ReadFile(path)
 	if e == nil {
 		if e = json.Unmarshal(b, &st.s); e != nil {
@@ -90,6 +99,9 @@ func OpenStore(path string) (*Store, error) {
 		}
 		if st.s.JoinRequests == nil {
 			st.s.JoinRequests = map[string]CallJoinRequest{}
+		}
+		if st.s.Devices == nil {
+			st.s.Devices = map[string]DeviceRegistration{}
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return nil, e

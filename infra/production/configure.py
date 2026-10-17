@@ -32,8 +32,24 @@ def render(api, media, turn, public_ip, contact, output):
     secret = existing.get('LIVEKIT_API_SECRET', secrets.token_hex(32))
     if not re.fullmatch(r'AP[0-9a-f]{24}', key) or not re.fullmatch(r'[0-9a-f]{64}', secret):
         raise ValueError('Existing generated secrets have an unexpected format')
+    push_values = {name: existing.get(name, '') for name in [
+        'PAIRDESK_APNS_TEAM_ID', 'PAIRDESK_APNS_KEY_ID', 'PAIRDESK_APNS_TOPIC',
+        'PAIRDESK_APNS_PRIVATE_KEY_HOST_FILE', 'PAIRDESK_APNS_HOST',
+        'PAIRDESK_FCM_PROJECT_ID', 'PAIRDESK_FCM_SERVICE_ACCOUNT_HOST_FILE']}
+    safe_patterns = {
+        'PAIRDESK_APNS_TEAM_ID': r'[A-Za-z0-9]{0,20}',
+        'PAIRDESK_APNS_KEY_ID': r'[A-Za-z0-9]{0,20}',
+        'PAIRDESK_APNS_TOPIC': r'[A-Za-z0-9.-]{0,255}',
+        'PAIRDESK_APNS_PRIVATE_KEY_HOST_FILE': r'(/[A-Za-z0-9._-]+)*',
+        'PAIRDESK_APNS_HOST': r'(https://[A-Za-z0-9.-]+(:[0-9]{1,5})?)?',
+        'PAIRDESK_FCM_PROJECT_ID': r'([a-z][a-z0-9-]{0,62})?',
+        'PAIRDESK_FCM_SERVICE_ACCOUNT_HOST_FILE': r'(/[A-Za-z0-9._-]+)*',
+    }
+    for name, value in push_values.items():
+        if not re.fullmatch(safe_patterns[name], value):
+            raise ValueError(f'{name} contains unsupported characters')
     values = dict(API_DOMAIN=api, MEDIA_DOMAIN=media, TURN_DOMAIN=turn, PUBLIC_IP=public_ip,
-                  CERT_CONTACT=contact, LIVEKIT_API_KEY=key, LIVEKIT_API_SECRET=secret)
+                  CERT_CONTACT=contact, LIVEKIT_API_KEY=key, LIVEKIT_API_SECRET=secret, **push_values)
     env_file.write_text(''.join(f'{k}={v}\n' for k, v in values.items()))
     os.chmod(env_file, 0o600)
     for filename in ['nginx.conf', 'livekit.yaml']:

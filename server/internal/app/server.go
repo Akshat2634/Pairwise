@@ -27,6 +27,7 @@ const maxRoom = 4
 
 type Server struct {
 	store                        *Store
+	push                         PushSender
 	liveURL, liveKey, liveSecret string
 	liveAPIURL                   string
 	dummyHash                    []byte
@@ -40,7 +41,7 @@ func New(st *Store) *Server {
 	if apiURL == "" {
 		apiURL = "http://127.0.0.1:7880"
 	}
-	return &Server{store: st, liveURL: os.Getenv("LIVEKIT_URL"), liveAPIURL: apiURL, liveKey: os.Getenv("LIVEKIT_API_KEY"), liveSecret: os.Getenv("LIVEKIT_API_SECRET"), dummyHash: h, hits: map[string][]time.Time{}}
+	return &Server{store: st, push: configuredPushFromEnv(), liveURL: os.Getenv("LIVEKIT_URL"), liveAPIURL: apiURL, liveKey: os.Getenv("LIVEKIT_API_KEY"), liveSecret: os.Getenv("LIVEKIT_API_SECRET"), dummyHash: h, hits: map[string][]time.Time{}}
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -56,6 +57,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/me", s.auth(s.me))
 	mux.HandleFunc("/v1/users", s.auth(s.users))
 	mux.HandleFunc("/v1/heartbeat", s.auth(s.heartbeat))
+	mux.HandleFunc("/v1/devices", s.auth(s.devices))
+	mux.HandleFunc("/v1/devices/", s.auth(s.devices))
 	mux.HandleFunc("/v1/logout", s.auth(s.logout))
 	mux.HandleFunc("/v1/password", s.auth(s.changePassword))
 	mux.HandleFunc("/v1/admin/users", s.auth(s.adminCreateUser))

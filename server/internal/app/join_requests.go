@@ -136,6 +136,13 @@ func (s *Server) createJoinRequest(w http.ResponseWriter, r *http.Request, u Use
 		fail(w, 500, "internal error")
 		return
 	}
+	participants := make([]string, 0, len(room.Members))
+	for userID := range room.Members {
+		if userID != u.ID && activeMemberInRoomLocked(s.store.s, userID, roomID, now) {
+			participants = append(participants, userID)
+		}
+	}
+	s.notify(participants, "join_request", roomID, request.ExpiresAt)
 	writeJSON(w, http.StatusCreated, map[string]any{"request": s.joinRequestSnapshotLocked(request, s.store.s.Users[u.ID], room, now)})
 }
 

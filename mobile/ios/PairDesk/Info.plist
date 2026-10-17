@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key><string>PairDesk</string>
+	<key>NSCameraUsageDescription</key><string>PairDesk only uses the camera when you turn on video during a call.</string>
+	<key>NSMicrophoneUsageDescription</key><string>PairDesk uses the microphone for voice calls when you join.</string>
+	<key>UIBackgroundModes</key><array><string>audio</string><string>voip</string><string>remote-notification</string></array>
+</dict>
+</plist>
