@@ -7,7 +7,7 @@ struct SharedCursorLayer: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let colors = Theme.distinctPersonColors(for: pointers.map(\.id))
+            let colors = Theme.distinctPersonColors(for: Array(names.keys))
             ForEach(pointers) { pointer in
                 if let point = ScreenCoordinateMapper.displayedPoint(normalized: CGPoint(x: pointer.x, y: pointer.y),
                                                                      container: CGRect(origin: .zero, size: geometry.size),
