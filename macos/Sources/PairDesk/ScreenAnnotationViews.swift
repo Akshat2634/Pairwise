@@ -38,3 +38,36 @@ struct ScreenAnnotationLayer: View {
         }
     }
 }
+
+struct ScreenAnnotationLaserLayer: View {
+    let lasers: [ScreenAnnotationLaser]
+    let names: [String: String]
+    let contentSize: CGSize
+
+    var body: some View {
+        GeometryReader { geometry in
+            TimelineView(.animation(minimumInterval: 0.1)) { _ in
+                ForEach(lasers.filter { $0.expiresAt > ProcessInfo.processInfo.systemUptime }, id: \.participantIdentity) { laser in
+                    if let point = ScreenCoordinateMapper.displayedPoint(
+                        normalized: CGPoint(x: laser.point.x, y: laser.point.y),
+                        container: CGRect(origin: .zero, size: geometry.size), contentSize: contentSize) {
+                        let remaining = max(0, min(1, laser.expiresAt - ProcessInfo.processInfo.systemUptime))
+                        let color = Theme.personColor(for: laser.participantIdentity)
+                        ZStack {
+                            Circle().fill(color.opacity(0.3 * remaining)).frame(width: 34, height: 34)
+                            Circle().stroke(color.opacity(remaining), lineWidth: 3).frame(width: 25, height: 25)
+                            Circle().fill(color).frame(width: 10, height: 10)
+                            Text(names[laser.participantIdentity] ?? "Teammate")
+                                .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white)
+                                .padding(.horizontal, 7).padding(.vertical, 4)
+                                .background(color, in: Capsule())
+                                .offset(x: 0, y: -28)
+                        }
+                        .position(point)
+                        .allowsHitTesting(false)
+                    }
+                }
+            }
+        }
+    }
+}

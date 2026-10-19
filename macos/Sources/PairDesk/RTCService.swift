@@ -69,6 +69,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     @Published private(set) var cursorSessionID: String?
     @Published private(set) var localCursorPosition: CGPoint?
     @Published private(set) var screenAnnotations: [ScreenAnnotationStroke] = []
+    @Published private(set) var screenAnnotationLasers: [ScreenAnnotationLaser] = []
     @Published private(set) var annotationsAllowed = true
     var usesIndependentCursors: Bool { !isSharing && cursorSessionID != nil }
     var canPointAtRemoteScreen: Bool { connected && !isSharing && screenTrack != nil && activeSharerIdentity != nil }
@@ -1763,16 +1764,28 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         publishAnnotation(message, to: sharer)
     }
 
+    func setScreenAnnotationLaser(_ point: ScreenAnnotationPoint?) {
+        guard canAnnotateScreen, point?.isValid ?? true,
+              let session = cursorSessionID, let sharer = activeSharerIdentity, let localIdentity else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        annotationBook.setLaser(point, participantIdentity: localIdentity, now: now)
+        screenAnnotationLasers = Array(annotationBook.lasers.values)
+        publishAnnotation(ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(), kind: .laser,
+                                                  point: point), to: sharer)
+    }
+
     func clearScreenAnnotations() {
         guard connected, let session = cursorSessionID, let localIdentity else { return }
         if isSharing {
             annotationBook.clear()
             screenAnnotations = []
+            screenAnnotationLasers = []
             publishAnnotation(ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(), kind: .clear,
                                                       participantIdentity: localIdentity), to: nil)
         } else if let sharer = activeSharerIdentity {
             annotationBook.clear(participantIdentity: localIdentity)
             screenAnnotations = annotationBook.strokes
+            screenAnnotationLasers = Array(annotationBook.lasers.values)
             publishAnnotation(ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(), kind: .clear), to: sharer)
         }
     }
@@ -1780,7 +1793,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     func setAnnotationsAllowed(_ enabled: Bool) {
         guard isSharing, annotationsAllowed != enabled, let session = cursorSessionID, let localIdentity else { return }
         annotationsAllowed = enabled
-        if !enabled { annotationBook.clear(); screenAnnotations = [] }
+        if !enabled { annotationBook.clear(); screenAnnotations = []; screenAnnotationLasers = [] }
         let message = ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(), kind: .availability,
                                               participantIdentity: localIdentity, enabled: enabled)
         publishAnnotation(message, to: nil)
@@ -1815,10 +1828,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                                                         hostEnabled: annotationsAllowed, lastSequence: lastSequence) else { return }
             annotationSequenceBySender[sender] = message.sequence
             if message.kind == .clear { annotationBook.clear(participantIdentity: sender) }
-            else if let strokeID = message.strokeID, let point = message.point {
+            else if message.kind == .laser {
+                annotationBook.setLaser(message.point, participantIdentity: sender, now: ProcessInfo.processInfo.systemUptime)
+            } else if let strokeID = message.strokeID, let point = message.point {
                 annotationBook.add(point, strokeID: strokeID, participantIdentity: sender)
             }
             screenAnnotations = annotationBook.strokes
+            screenAnnotationLasers = Array(annotationBook.lasers.values)
             var relay = message
             relay.sequence = nextAnnotationSequence()
             relay.participantIdentity = sender
@@ -1835,6 +1851,8 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                 if let strokeID = message.strokeID, let point = message.point {
                     annotationBook.add(point, strokeID: strokeID, participantIdentity: author)
                 }
+            case .laser:
+                annotationBook.setLaser(message.point, participantIdentity: author, now: ProcessInfo.processInfo.systemUptime)
             case .clear:
                 if author == sharer { annotationBook.clear() }
                 else { annotationBook.clear(participantIdentity: author) }
@@ -1842,12 +1860,14 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                 return
             }
             screenAnnotations = annotationBook.strokes
+            screenAnnotationLasers = Array(annotationBook.lasers.values)
         }
     }
 
     private func clearAnnotationParticipant(_ identity: String) {
         annotationBook.clear(participantIdentity: identity)
         screenAnnotations = annotationBook.strokes
+        screenAnnotationLasers = Array(annotationBook.lasers.values)
         annotationSequenceBySender.removeValue(forKey: identity)
         annotationAvailabilityBySender.removeValue(forKey: identity)
         annotationRateLimiter.remove(sender: identity)
@@ -1901,6 +1921,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         remotePointers.removeAll()
         annotationBook.clear()
         screenAnnotations.removeAll()
+        screenAnnotationLasers.removeAll()
         annotationSequenceBySender.removeAll()
         annotationRateLimiter.reset()
         annotationsAllowed = isSharing
@@ -1917,6 +1938,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         cursorSessionID = session
         annotationBook.clear()
         screenAnnotations.removeAll()
+        screenAnnotationLasers.removeAll()
         annotationSequenceBySender.removeAll()
         annotationRateLimiter.reset()
         annotationsAllowed = true
@@ -1925,7 +1947,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     private func applyAnnotationAvailability(_ enabled: Bool, sender: String, sequence: UInt64) {
         annotationsAllowed = enabled
         annotationSequenceBySender[sender] = sequence
-        if !enabled { annotationBook.clear(); screenAnnotations.removeAll() }
+        if !enabled { annotationBook.clear(); screenAnnotations.removeAll(); screenAnnotationLasers.removeAll() }
     }
 
     private func applyCachedAnnotationAvailability(sender: String) {

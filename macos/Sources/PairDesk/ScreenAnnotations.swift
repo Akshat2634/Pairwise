@@ -8,7 +8,7 @@ struct ScreenAnnotationPoint: Codable, Equatable {
 }
 
 struct ScreenAnnotationMessage: Codable, Equatable {
-    enum Kind: String, Codable { case point, clear, availability }
+    enum Kind: String, Codable { case point, laser, clear, availability }
     var version = 1
     let session: String
     var sequence: UInt64
@@ -41,6 +41,9 @@ enum ScreenAnnotationPolicy {
                   strokeID.utf8.count <= maximumStrokeIDLength,
                   let point = message.point, point.isValid, message.enabled == nil else { return false }
             return true
+        case .laser:
+            return hostEnabled && message.strokeID == nil && message.enabled == nil
+                && (message.point?.isValid ?? true)
         case .clear:
             return message.strokeID == nil && message.point == nil && message.enabled == nil
         case .availability:
@@ -60,6 +63,8 @@ enum ScreenAnnotationPolicy {
                   strokeID.utf8.count <= maximumStrokeIDLength,
                   let point = message.point, point.isValid, message.enabled == nil else { return false }
             return true
+        case .laser:
+            return message.strokeID == nil && message.enabled == nil && (message.point?.isValid ?? true)
         case .clear:
             return message.strokeID == nil && message.point == nil && message.enabled == nil
         case .availability:
@@ -71,7 +76,9 @@ enum ScreenAnnotationPolicy {
 struct ScreenAnnotationBook {
     static let maximumStrokes = 48
     static let maximumPointsPerStroke = 256
+    static let laserLifetime: TimeInterval = 1.25
     private(set) var strokes: [ScreenAnnotationStroke] = []
+    private(set) var lasers: [String: ScreenAnnotationLaser] = [:]
 
     mutating func add(_ point: ScreenAnnotationPoint, strokeID: String, participantIdentity: String) {
         guard point.isValid, !strokeID.isEmpty, !participantIdentity.isEmpty else { return }
@@ -85,10 +92,27 @@ struct ScreenAnnotationBook {
         }
     }
 
-    mutating func clear(participantIdentity: String? = nil) {
-        guard let participantIdentity else { strokes.removeAll(); return }
-        strokes.removeAll { $0.participantIdentity == participantIdentity }
+    mutating func setLaser(_ point: ScreenAnnotationPoint?, participantIdentity: String, now: TimeInterval) {
+        guard !participantIdentity.isEmpty, now.isFinite else { return }
+        lasers = lasers.filter { now - $0.value.updatedAt < Self.laserLifetime }
+        guard let point else { lasers.removeValue(forKey: participantIdentity); return }
+        guard point.isValid else { return }
+        lasers[participantIdentity] = ScreenAnnotationLaser(participantIdentity: participantIdentity, point: point, updatedAt: now)
     }
+
+    mutating func clear(participantIdentity: String? = nil) {
+        guard let participantIdentity else { strokes.removeAll(); lasers.removeAll(); return }
+        strokes.removeAll { $0.participantIdentity == participantIdentity }
+        lasers.removeValue(forKey: participantIdentity)
+    }
+}
+
+struct ScreenAnnotationLaser: Equatable {
+    let participantIdentity: String
+    let point: ScreenAnnotationPoint
+    let updatedAt: TimeInterval
+
+    var expiresAt: TimeInterval { updatedAt + ScreenAnnotationBook.laserLifetime }
 }
 
 struct ScreenAnnotationRateLimiter {
