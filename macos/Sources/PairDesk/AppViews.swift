@@ -121,6 +121,26 @@ struct SharedScreenWindow: View {
                 .buttonStyle(.bordered)
                 .tint(rtc.isCameraEnabled ? Theme.accent : nil)
                 .help(rtc.isCameraEnabled ? "Turn camera off" : "Turn camera on")
+                if rtc.isCameraEnabled && rtc.cameraDevices.count > 1 {
+                    Menu {
+                        ForEach(rtc.cameraDevices) { device in
+                            Button {
+                                Task { await rtc.selectCamera(device.id) }
+                            } label: {
+                                if device.id == rtc.selectedCameraID {
+                                    Label(device.name, systemImage: "checkmark")
+                                } else {
+                                    Text(device.name)
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .help("Choose camera")
+                    .accessibilityLabel("Choose camera")
+                }
                 Button { showClipboard = true } label: {
                     Label(rtc.clipboardSyncEnabled ? "Clipboard sync on" : "Clipboard",
                           systemImage: rtc.clipboardSyncEnabled ? "doc.on.clipboard.fill" : "doc.on.clipboard")
@@ -163,6 +183,9 @@ struct SharedScreenWindow: View {
                     .background(Theme.surface)
             }
             CameraStrip(feeds: rtc.cameraFeeds).padding(.horizontal, 12).padding(.vertical, 4)
+            if let notice = rtc.cameraDeviceNotice {
+                Text(notice).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
+            }
             HStack(spacing: 0) {
                 ZStack {
                     Color.black

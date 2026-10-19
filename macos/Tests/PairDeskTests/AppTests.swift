@@ -8,6 +8,15 @@ final class AppTests: XCTestCase {
         XCTAssertEqual(AudioMeter.level(samples: [0.5, -0.5]), 0.5, accuracy: 0.0001)
         XCTAssertEqual(AudioMeter.level(samples: [2, -2]), 1)
     }
+    func testCameraSelectionFallsBackWhenSavedDeviceIsMissing() {
+        let choices = [CameraDeviceChoice(id: "built-in", name: "Built-in"),
+                       CameraDeviceChoice(id: "usb", name: "USB camera")]
+        XCTAssertEqual(CameraDeviceSelection.resolve(savedID: "usb", available: choices).id, "usb")
+        XCTAssertFalse(CameraDeviceSelection.resolve(savedID: "usb", available: choices).savedDeviceUnavailable)
+        XCTAssertEqual(CameraDeviceSelection.resolve(savedID: "removed", available: choices).id, "built-in")
+        XCTAssertTrue(CameraDeviceSelection.resolve(savedID: "removed", available: choices).savedDeviceUnavailable)
+        XCTAssertNil(CameraDeviceSelection.resolve(savedID: nil, available: []).id)
+    }
     func testScreenNetworkQualityUsesMeasuredRTTAndHandlesMissingStats() {
         XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: nil), .measuring)
         XCTAssertEqual(ScreenNetworkQuality.from(roundTripTimeSeconds: .nan), .measuring)

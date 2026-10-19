@@ -44,6 +44,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     @Published private(set) var connected = false
     @Published private(set) var isMicrophoneEnabled = false
     @Published private(set) var isCameraEnabled = false
+    @Published private(set) var cameraDevices: [CameraDeviceChoice] = []
+    @Published private(set) var selectedCameraID: String?
+    @Published private(set) var cameraDeviceNotice: String?
     @Published private(set) var isSharing = false {
         didSet {
             if !isSharing { sharingIndicator.hide(); hostCursorOverlay.hide() }
@@ -146,6 +149,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     private var inputMonitor: Any?
     private var localInputMonitor: Any?
     private var notificationTokens: [NSObjectProtocol] = []
+    private var cameraCaptureDevices: [String: AVCaptureDevice] = [:]
     private var controlSendTail: Task<Void, Never>?
     private var clipboardReplayWindow = ClipboardTransferReplayWindow()
     private var clipboardAssembler = ClipboardTransferAssembler()
@@ -185,6 +189,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             return event
         }
         let appCenter = NotificationCenter.default
+        for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
+            notificationTokens.append(appCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in await self?.refreshCameraDevices() }
+            })
+        }
         notificationTokens.append(appCenter.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, !self.isSharing else { return }
@@ -330,11 +339,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                 }
                 try await Task.sleep(for: .milliseconds(50))
             }
+            await refreshCameraDevices()
         }
         do {
             _ = try await room.localParticipant.setCamera(
                 enabled: enabled,
-                captureOptions: CameraCaptureOptions(),
+                captureOptions: CameraCaptureOptions(device: selectedCameraID.flatMap { cameraCaptureDevices[$0] }),
                 publishOptions: VideoPublishOptions(name: "pairdesk.camera", simulcast: false)
             )
             isCameraEnabled = enabled
@@ -348,6 +358,60 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         } catch {
             self.error = "Camera could not be \(enabled ? "enabled" : "disabled"): \(error.localizedDescription)"
             throw error
+        }
+    }
+
+    func selectCamera(_ deviceID: String) async {
+        guard let device = cameraCaptureDevices[deviceID] else { return }
+        if isCameraEnabled {
+            guard let room,
+                  let publication = room.localParticipant.videoTracks.compactMap({ $0 as? LocalTrackPublication }).first(where: { $0.source == .camera }),
+                  let track = publication.track as? LocalVideoTrack,
+                  let capturer = track.capturer as? CameraCapturer else { return }
+            do {
+                _ = try await capturer.set(options: CameraCaptureOptions(device: device))
+            } catch {
+                cameraDeviceNotice = "Couldn't switch camera. The current camera remains active."
+                return
+            }
+        }
+        selectedCameraID = deviceID
+        UserDefaults.standard.set(deviceID, forKey: "cameraDeviceID")
+        cameraDeviceNotice = nil
+    }
+
+    private func refreshCameraDevices() async {
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return }
+        do {
+            let devices = try await CameraCapturer.captureDevices()
+            cameraCaptureDevices = Dictionary(uniqueKeysWithValues: devices.map { ($0.uniqueID, $0) })
+            cameraDevices = devices.map { CameraDeviceChoice(id: $0.uniqueID, name: $0.localizedName) }
+            let savedID = UserDefaults.standard.string(forKey: "cameraDeviceID")
+            let resolved = CameraDeviceSelection.resolve(savedID: selectedCameraID ?? savedID, available: cameraDevices)
+            let previousID = selectedCameraID
+            selectedCameraID = resolved.id
+            if let resolvedID = resolved.id { UserDefaults.standard.set(resolvedID, forKey: "cameraDeviceID") }
+            if resolved.savedDeviceUnavailable {
+                cameraDeviceNotice = resolved.id == nil
+                    ? "No camera is available. Voice and screen sharing are still available."
+                    : "The selected camera is unavailable. Switched to \(cameraDevices.first(where: { $0.id == resolved.id })?.name ?? "another camera")."
+            } else if cameraDevices.isEmpty {
+                cameraDeviceNotice = "No camera is available. Voice and screen sharing are still available."
+                if isCameraEnabled { try? await setCameraEnabled(false) }
+            } else if previousID == nil {
+                cameraDeviceNotice = nil
+            }
+            if isCameraEnabled, resolved.savedDeviceUnavailable, let deviceID = resolved.id,
+               let room,
+               let publication = room.localParticipant.videoTracks.compactMap({ $0 as? LocalTrackPublication }).first(where: { $0.source == .camera }),
+               let track = publication.track as? LocalVideoTrack,
+               let capturer = track.capturer as? CameraCapturer,
+               let device = cameraCaptureDevices[deviceID] {
+                do { _ = try await capturer.set(options: CameraCaptureOptions(device: device)) }
+                catch { cameraDeviceNotice = "The camera disconnected. Turn video off and on to retry." }
+            }
+        } catch {
+            cameraDeviceNotice = "Couldn't load camera devices. Voice and screen sharing are still available."
         }
     }
 
