@@ -190,6 +190,22 @@ struct MenuBarPanel: View {
                          systemImage: rtc.isCameraEnabled ? "video.fill" : "video.slash.fill",
                          highlight: rtc.isCameraEnabled ? Theme.accent : nil,
                          action: { Task { do { try await rtc.setCameraEnabled(!rtc.isCameraEnabled) } catch { store.error = error.localizedDescription } } }) {
+                    if rtc.isCameraEnabled && rtc.cameraDevices.count > 1 {
+                        Section("Choose camera") {
+                            ForEach(rtc.cameraDevices) { device in
+                                Button {
+                                    Task { await rtc.selectCamera(device.id) }
+                                } label: {
+                                    if device.id == rtc.selectedCameraID {
+                                        Label(device.name, systemImage: "checkmark")
+                                    } else {
+                                        Text(device.name)
+                                    }
+                                }
+                            }
+                        }
+                        Divider()
+                    }
                     Button("Camera privacy settings…") { PermissionManager.shared.open("Privacy_Camera") }
                 }
                 CallTile(title: rtc.isSharing ? "Stop sharing" : "Share screen",
@@ -212,6 +228,9 @@ struct MenuBarPanel: View {
                 Button("Microphone access needed to talk…") { show("permissions") }.buttonStyle(.plain).font(.caption).foregroundStyle(Theme.accent)
             }
             if rtc.isSharing { sharingStatus }
+            if let notice = rtc.cameraDeviceNotice {
+                Text(notice).font(.caption).foregroundStyle(Theme.textMuted).fixedSize(horizontal: false, vertical: true)
+            }
             if rtc.clipboardSyncEnabled { clipboardSyncStatus }
             HStack {
                 if !store.canAddPerson {
