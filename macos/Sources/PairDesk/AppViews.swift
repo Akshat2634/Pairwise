@@ -63,6 +63,8 @@ struct SharedScreenWindow: View {
     @State private var showClipboard = false
     @State private var permissions = false
     @State private var sourcePicker = false
+    @State private var annotationMode = false
+    @State private var annotationStrokeID: String?
     private var shareStatus: String? {
         guard let sharer = rtc.activeSharerIdentity else { return nil }
         switch rtc.controlState {
@@ -113,6 +115,22 @@ struct SharedScreenWindow: View {
                 .tint(rtc.isMicrophoneEnabled ? Theme.accent : Theme.attention)
                 .help(rtc.isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone")
                 .accessibilityLabel(rtc.isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone")
+                Button {
+                    annotationMode.toggle()
+                    annotationStrokeID = nil
+                } label: {
+                    Label(annotationMode ? "Done marking" : "Mark screen",
+                          systemImage: annotationMode ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
+                }
+                .buttonStyle(.bordered)
+                .tint(annotationMode ? Theme.accent : nil)
+                .disabled(!rtc.canAnnotateScreen)
+                .help(rtc.annotationsAllowed ? "Draw temporary marks on the shared screen" : "The sharer disabled annotations")
+                if !rtc.screenAnnotations.isEmpty {
+                    Button("Clear marks") { rtc.clearScreenAnnotations() }
+                        .buttonStyle(.bordered)
+                        .help("Clear your marks" + (rtc.isSharing ? " from the shared screen" : ""))
+                }
                 Button {
                     Task { do { try await rtc.setCameraEnabled(!rtc.isCameraEnabled) } catch { store.error = error.localizedDescription } }
                 } label: {
@@ -196,21 +214,30 @@ struct SharedScreenWindow: View {
                                 if let dimensions = track.dimensions {
                                     GeometryReader { geometry in
                                         let contentSize = CGSize(width: Int(dimensions.width), height: Int(dimensions.height))
-                                        if rtc.usesIndependentCursors {
-                                            let pointers = rtc.remotePointers + localPointer
+                                        ZStack {
                                             let names = Dictionary(uniqueKeysWithValues: rtc.participants.map { ($0.identity, $0.name) })
-                                            SharedCursorLayer(pointers: pointers, names: names, contentSize: contentSize)
-                                        } else {
-                                            ForEach(rtc.remotePointers) { pointer in
-                                                if let point = ScreenCoordinateMapper.displayedPoint(
-                                                    normalized: CGPoint(x: pointer.x, y: pointer.y),
-                                                    container: CGRect(origin: .zero, size: geometry.size),
-                                                    contentSize: contentSize
-                                                ) {
-                                                    RemotePointerBadge(name: rtc.participantName(for: pointer.id), color: cursorColor(for: pointer.id))
-                                                        .position(x: min(max(point.x + 54, 54), geometry.size.width - 54),
-                                                                  y: min(max(point.y + 14, 14), geometry.size.height - 14))
-                                                        .transition(.opacity)
+                                            ScreenAnnotationLayer(strokes: rtc.screenAnnotations, names: names, contentSize: contentSize)
+                                                .allowsHitTesting(false)
+                                            if annotationMode && rtc.canAnnotateScreen {
+                                                ScreenAnnotationInputLayer(rtc: rtc, contentSize: contentSize,
+                                                                           strokeID: $annotationStrokeID)
+                                            }
+                                            if rtc.usesIndependentCursors {
+                                                let pointers = rtc.remotePointers + localPointer
+                                                let names = Dictionary(uniqueKeysWithValues: rtc.participants.map { ($0.identity, $0.name) })
+                                                SharedCursorLayer(pointers: pointers, names: names, contentSize: contentSize)
+                                            } else {
+                                                ForEach(rtc.remotePointers) { pointer in
+                                                    if let point = ScreenCoordinateMapper.displayedPoint(
+                                                        normalized: CGPoint(x: pointer.x, y: pointer.y),
+                                                        container: CGRect(origin: .zero, size: geometry.size),
+                                                        contentSize: contentSize
+                                                    ) {
+                                                        RemotePointerBadge(name: rtc.participantName(for: pointer.id), color: cursorColor(for: pointer.id))
+                                                            .position(x: min(max(point.x + 54, 54), geometry.size.width - 54),
+                                                                      y: min(max(point.y + 14, 14), geometry.size.height - 14))
+                                                            .transition(.opacity)
+                                                    }
                                                 }
                                             }
                                         }
@@ -238,6 +265,9 @@ struct SharedScreenWindow: View {
         }
         .onChange(of: rtc.incomingClipboardTransfer?.message.id) { _, offerID in
             if offerID != nil { showClipboard = true }
+        }
+        .onChange(of: rtc.canAnnotateScreen) { _, canAnnotate in
+            if !canAnnotate { annotationMode = false; annotationStrokeID = nil }
         }
         .sheet(isPresented: $permissions) { PermissionsView() }
         .sheet(isPresented: $sourcePicker) { ScreenSharePickerView(store: store) }
@@ -271,6 +301,28 @@ struct SharedScreenWindow: View {
         case .good: .green
         case .fair: .orange
         case .highLatency: .red
+        }
+    }
+}
+
+private struct ScreenAnnotationInputLayer: View {
+    @ObservedObject var rtc: RTCService
+    let contentSize: CGSize
+    @Binding var strokeID: String?
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear.contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard let point = ScreenCoordinateMapper.normalized(point: value.location,
+                            container: CGRect(origin: .zero, size: geometry.size), contentSize: contentSize) else { return }
+                        if strokeID == nil { strokeID = UUID().uuidString }
+                        if let strokeID {
+                            rtc.addScreenAnnotationPoint(ScreenAnnotationPoint(x: point.x, y: point.y), strokeID: strokeID)
+                        }
+                    }
+                    .onEnded { _ in strokeID = nil })
         }
     }
 }

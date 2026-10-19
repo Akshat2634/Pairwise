@@ -68,8 +68,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     @Published private(set) var remotePointers: [RemotePointer] = [] { didSet { updateHostCursors() } }
     @Published private(set) var cursorSessionID: String?
     @Published private(set) var localCursorPosition: CGPoint?
+    @Published private(set) var screenAnnotations: [ScreenAnnotationStroke] = []
+    @Published private(set) var annotationsAllowed = true
     var usesIndependentCursors: Bool { !isSharing && cursorSessionID != nil }
     var canPointAtRemoteScreen: Bool { connected && !isSharing && screenTrack != nil && activeSharerIdentity != nil }
+    var canAnnotateScreen: Bool { canPointAtRemoteScreen && remoteControlUnavailableReason != .windowShare && annotationsAllowed }
     @Published private(set) var localIdentity: String?
     @Published private(set) var audioInputDevices: [AudioDeviceChoice] = []
     @Published private(set) var audioOutputDevices: [AudioDeviceChoice] = []
@@ -150,6 +153,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     private var localInputMonitor: Any?
     private var notificationTokens: [NSObjectProtocol] = []
     private var cameraCaptureDevices: [String: AVCaptureDevice] = [:]
+    private var annotationBook = ScreenAnnotationBook()
+    private var annotationSequence: UInt64 = 0
+    private var annotationSequenceBySender: [String: UInt64] = [:]
+    private var annotationRateLimiter = ScreenAnnotationRateLimiter()
+    private var annotationSendTail: Task<Void, Never>?
+    private var annotationAvailabilityBySender: [String: (session: String, enabled: Bool, sequence: UInt64)] = [:]
     private var controlSendTail: Task<Void, Never>?
     private var clipboardReplayWindow = ClipboardTransferReplayWindow()
     private var clipboardAssembler = ClipboardTransferAssembler()
@@ -710,7 +719,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             shareTrack = track
             track.capturer.add(delegate: self)
             shareBounds = selectedWindow ? nil : selectedFrame
-            cursorSessionID = selectedFrame == nil ? nil : UUID().uuidString
+            setCursorSession(selectedFrame == nil ? nil : UUID().uuidString)
             shareIsWindow = selectedWindow
             remoteControlAvailable = !shareIsWindow && canControlDisplay
             remoteControlManuallyPaused = false
@@ -720,6 +729,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             adaptiveShareStatus = adaptiveQualityEnabled ? "Auto · \(adaptiveShareController?.current.title ?? quality.title)" : nil
             screenTrack = track
             isSharing = true
+            annotationsAllowed = true
             if #available(macOS 15.2, *), selectedWindow, let window = contentFilter.includedWindows.first {
                 sharingIndicator.show(.window(window.windowID))
             } else if !selectedWindow {
@@ -907,15 +917,21 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         sendControl(.init(epoch: "", sequence: nextSequence(), kind: .availability,
                           available: state.available, reason: state.reason?.rawValue,
                           cursorSession: shareIsWindow ? nil : cursorSessionID), to: identity)
+        if !shareIsWindow, let session = cursorSessionID {
+            publishAnnotation(ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(),
+                                                      kind: .availability, participantIdentity: localIdentity,
+                                                      enabled: annotationsAllowed), to: identity)
+        }
     }
 
     /// Viewer: prefer what the host said; fall back to the track name for older hosts.
     private func applyRemoteControlAvailability(from sender: String, trackName: String) {
         if let known = controlAvailabilityBySender[sender] {
-            cursorSessionID = known.cursorSession
+            setCursorSession(known.cursorSession)
             applyRemoteControlAvailability(known.available, reason: known.reason)
+            applyCachedAnnotationAvailability(sender: sender)
         } else {
-            cursorSessionID = nil
+            setCursorSession(nil)
             let isWindow = trackName.hasSuffix(".window")
             applyRemoteControlAvailability(!isWindow, reason: isWindow ? .windowShare : nil)
         }
@@ -1222,6 +1238,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             self.cameraTracks.removeValue(forKey: identity)
             self.refreshParticipants()
             self.refreshSharer()
+            self.clearAnnotationParticipant(identity)
             self.removeRemotePointer(identity)
             self.cursorSequenceBySender.removeValue(forKey: identity)
             self.independentCursorParticipants.remove(identity)
@@ -1351,6 +1368,16 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             }
             return
         }
+        if topic == Self.annotationTopic, data.count <= 256,
+           let sender = participant?.identity?.stringValue,
+           let message = try? JSONDecoder().decode(ScreenAnnotationMessage.self, from: data) {
+            Task { @MainActor [weak self] in
+                guard let self, self.room === room,
+                      room.remoteParticipants.values.contains(where: { $0.identity?.stringValue == sender }) else { return }
+                self.receiveAnnotation(message, sender: sender)
+            }
+            return
+        }
         guard topic == Self.controlTopic, data.count <= 2_048,
               let message = try? JSONDecoder().decode(RemoteControlMessage.self, from: data),
               let sender = participant?.identity?.stringValue
@@ -1364,6 +1391,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     // MARK: Data protocol
 
     nonisolated private static let controlTopic = "pairdesk.control.v1"
+    nonisolated private static let annotationTopic = "pairdesk.annotation.v1"
     nonisolated private static let clipboardTopic = "pairdesk.clipboard.v1"
 
     /// Sends text only after the user explicitly presses Send clipboard.
@@ -1507,8 +1535,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             let session = message.cursorSession.flatMap { $0.isEmpty ? nil : $0 }
             controlAvailabilityBySender[sender] = (available, reason, session)
             if sender == activeSharerIdentity {
-                cursorSessionID = session
+                setCursorSession(session)
                 applyRemoteControlAvailability(available, reason: reason)
+                applyCachedAnnotationAvailability(sender: sender)
             }
         case .cursor:
             guard isSharing, !shareIsWindow, !isReconnecting,
@@ -1714,6 +1743,134 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         }
     }
 
+    func addScreenAnnotationPoint(_ point: ScreenAnnotationPoint, strokeID: String) {
+        guard canAnnotateScreen, point.isValid, strokeID.utf8.count <= ScreenAnnotationPolicy.maximumStrokeIDLength,
+              let session = cursorSessionID, let sharer = activeSharerIdentity, let localIdentity else { return }
+        annotationBook.add(point, strokeID: strokeID, participantIdentity: localIdentity)
+        screenAnnotations = annotationBook.strokes
+        let message = ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(), kind: .point,
+                                              strokeID: strokeID, point: point)
+        publishAnnotation(message, to: sharer)
+    }
+
+    func clearScreenAnnotations() {
+        guard connected, let session = cursorSessionID, let localIdentity else { return }
+        if isSharing {
+            annotationBook.clear()
+            screenAnnotations = []
+            publishAnnotation(ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(), kind: .clear,
+                                                      participantIdentity: localIdentity), to: nil)
+        } else if let sharer = activeSharerIdentity {
+            annotationBook.clear(participantIdentity: localIdentity)
+            screenAnnotations = annotationBook.strokes
+            publishAnnotation(ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(), kind: .clear), to: sharer)
+        }
+    }
+
+    func setAnnotationsAllowed(_ enabled: Bool) {
+        guard isSharing, annotationsAllowed != enabled, let session = cursorSessionID, let localIdentity else { return }
+        annotationsAllowed = enabled
+        if !enabled { annotationBook.clear(); screenAnnotations = [] }
+        let message = ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(), kind: .availability,
+                                              participantIdentity: localIdentity, enabled: enabled)
+        publishAnnotation(message, to: nil)
+    }
+
+    private func receiveAnnotation(_ message: ScreenAnnotationMessage, sender: String) {
+        guard let localIdentity else { return }
+        guard annotationRateLimiter.accepts(sender: sender, now: ProcessInfo.processInfo.systemUptime) else { return }
+        let lastSequence = annotationSequenceBySender[sender]
+
+        // This topic may overtake the control message that establishes the
+        // current share. Cache the sharer's availability until that session is
+        // known so the viewer never briefly enables a disabled annotation tool.
+        if !isSharing, message.kind == .availability,
+           !message.session.isEmpty, message.version == 1,
+           let author = message.participantIdentity, author == sender,
+           let enabled = message.enabled, message.strokeID == nil, message.point == nil,
+           message.sequence > (lastSequence ?? 0),
+           activeSharerIdentity == nil || activeSharerIdentity == sender {
+            annotationSequenceBySender[sender] = message.sequence
+            annotationAvailabilityBySender[sender] = (message.session, enabled, message.sequence)
+            if activeSharerIdentity == sender, cursorSessionID == message.session {
+                applyAnnotationAvailability(enabled, sender: sender, sequence: message.sequence)
+            }
+            return
+        }
+        guard let session = cursorSessionID else { return }
+
+        if isSharing {
+            let isParticipant = room?.remoteParticipants.values.contains(where: { $0.identity?.stringValue == sender }) == true
+            guard ScreenAnnotationPolicy.acceptsViewer(message, session: session, senderIsParticipant: isParticipant,
+                                                        hostEnabled: annotationsAllowed, lastSequence: lastSequence) else { return }
+            annotationSequenceBySender[sender] = message.sequence
+            if message.kind == .clear { annotationBook.clear(participantIdentity: sender) }
+            else if let strokeID = message.strokeID, let point = message.point {
+                annotationBook.add(point, strokeID: strokeID, participantIdentity: sender)
+            }
+            screenAnnotations = annotationBook.strokes
+            var relay = message
+            relay.sequence = nextAnnotationSequence()
+            relay.participantIdentity = sender
+            publishAnnotation(relay, excluding: sender)
+        } else {
+            guard let sharer = activeSharerIdentity,
+                  let author = message.participantIdentity,
+                  author == localIdentity || room?.remoteParticipants.values.contains(where: { $0.identity?.stringValue == author }) == true,
+                  ScreenAnnotationPolicy.acceptsBroadcast(message, session: session, senderIsSharer: sender == sharer,
+                                                          authorIsParticipant: true, lastSequence: lastSequence) else { return }
+            annotationSequenceBySender[sender] = message.sequence
+            switch message.kind {
+            case .point:
+                if let strokeID = message.strokeID, let point = message.point {
+                    annotationBook.add(point, strokeID: strokeID, participantIdentity: author)
+                }
+            case .clear:
+                if author == sharer { annotationBook.clear() }
+                else { annotationBook.clear(participantIdentity: author) }
+            case .availability:
+                return
+            }
+            screenAnnotations = annotationBook.strokes
+        }
+    }
+
+    private func clearAnnotationParticipant(_ identity: String) {
+        annotationBook.clear(participantIdentity: identity)
+        screenAnnotations = annotationBook.strokes
+        annotationSequenceBySender.removeValue(forKey: identity)
+        annotationAvailabilityBySender.removeValue(forKey: identity)
+        annotationRateLimiter.remove(sender: identity)
+        guard isSharing, let session = cursorSessionID else { return }
+        let clear = ScreenAnnotationMessage(session: session, sequence: nextAnnotationSequence(), kind: .clear,
+                                           participantIdentity: identity)
+        publishAnnotation(clear)
+    }
+
+    private func nextAnnotationSequence() -> UInt64 {
+        annotationSequence &+= 1
+        return annotationSequence
+    }
+
+    private func publishAnnotation(_ message: ScreenAnnotationMessage, to identity: String? = nil, excluding excludedIdentity: String? = nil) {
+        guard let room, let data = try? JSONEncoder().encode(message), data.count <= 256 else { return }
+        let destinations: [Participant.Identity]
+        if let identity { destinations = [Participant.Identity(from: identity)] }
+        else if let excludedIdentity {
+            destinations = room.remoteParticipants.values.compactMap { participant in
+                guard participant.identity?.stringValue != excludedIdentity else { return nil }
+                return participant.identity
+            }
+        } else { destinations = [] }
+        let previous = annotationSendTail
+        annotationSendTail = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, self.room === room, self.cursorSessionID == message.session else { return }
+            let options = DataPublishOptions(destinationIdentities: destinations, topic: Self.annotationTopic, reliable: false)
+            try? await room.localParticipant.publish(data: data, options: options)
+        }
+    }
+
     private func scheduleOwnerPointerRestore() {
         guard ownerPointerPosition != nil else { return }
         pointerRestoreTask?.cancel()
@@ -1727,17 +1884,44 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     }
 
     private func resetIndependentCursors() {
-        cursorSessionID = nil
+        setCursorSession(nil)
         localCursorPosition = nil
         pendingLossy[.cursor] = nil
         cursorExpiryTask?.cancel(); cursorExpiryTask = nil
         remotePointers.removeAll()
+        annotationBook.clear()
+        screenAnnotations.removeAll()
+        annotationSequenceBySender.removeAll()
+        annotationRateLimiter.reset()
+        annotationsAllowed = isSharing
         viewerQualityFeedback.removeAll()
         cursorSequenceBySender.removeAll()
         independentCursorParticipants.removeAll()
         ownerActivityTask?.cancel(); ownerActivityTask = nil
         ownerBusyUntil = 0
         scheduleOwnerPointerRestore()
+    }
+
+    private func setCursorSession(_ session: String?) {
+        guard cursorSessionID != session else { return }
+        cursorSessionID = session
+        annotationBook.clear()
+        screenAnnotations.removeAll()
+        annotationSequenceBySender.removeAll()
+        annotationRateLimiter.reset()
+        annotationsAllowed = true
+    }
+
+    private func applyAnnotationAvailability(_ enabled: Bool, sender: String, sequence: UInt64) {
+        annotationsAllowed = enabled
+        annotationSequenceBySender[sender] = sequence
+        if !enabled { annotationBook.clear(); screenAnnotations.removeAll() }
+    }
+
+    private func applyCachedAnnotationAvailability(sender: String) {
+        guard let cached = annotationAvailabilityBySender[sender],
+              activeSharerIdentity == sender, cursorSessionID == cached.session else { return }
+        applyAnnotationAvailability(cached.enabled, sender: sender, sequence: cached.sequence)
     }
 
     private func reportRemoteInputFailure() {
@@ -2012,7 +2196,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         hostCursorOverlay.prepare(captureBounds: bounds)
         shareBounds = bounds
         shareIsWindow = false
-        cursorSessionID = session
+        setCursorSession(session)
         activeSharerIdentity = localIdentity
         isSharing = true
     }
