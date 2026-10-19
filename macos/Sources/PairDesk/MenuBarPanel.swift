@@ -228,6 +228,13 @@ struct MenuBarPanel: View {
                 Button("Microphone access needed to talk…") { show("permissions") }.buttonStyle(.plain).font(.caption).foregroundStyle(Theme.accent)
             }
             if rtc.isSharing { sharingStatus }
+            if rtc.isSharing && !rtc.isSharingWindow {
+                Toggle("Allow screen annotations", isOn: Binding(
+                    get: { rtc.annotationsAllowed },
+                    set: { rtc.setAnnotationsAllowed($0) }
+                ))
+                .font(.caption)
+            }
             if let notice = rtc.cameraDeviceNotice {
                 Text(notice).font(.caption).foregroundStyle(Theme.textMuted).fixedSize(horizontal: false, vertical: true)
             }
