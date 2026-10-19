@@ -104,6 +104,11 @@ struct SharedScreenWindow: View {
                     Label(rtc.screenStreamMetrics.summary, systemImage: "rectangle.inset.filled")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         .help("Measured resolution, frame rate, and cumulative received-stream packet loss. These are viewer-side WebRTC statistics, not a full picture-quality score.")
+                    if let firstFrame = rtc.screenTimeToFirstFrameMilliseconds {
+                        Label("First frame · \(firstFrame) ms", systemImage: "stopwatch")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            .help("Elapsed time from attaching this screen track in the viewer until LiveKit reports its first rendered frame. It excludes invitation and call setup time.")
+                    }
                 }
                 Spacer()
                 Button {
