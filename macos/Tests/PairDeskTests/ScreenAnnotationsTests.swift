@@ -38,6 +38,21 @@ final class ScreenAnnotationsTests: XCTestCase {
                                                                 authorIsParticipant: false, lastSequence: 2))
     }
 
+    func testLaserRequiresParticipantAndHostPermissionAndBroadcastAuthor() {
+        let laser = ScreenAnnotationMessage(session: "share-1", sequence: 1, kind: .laser,
+                                            point: .init(x: 0.3, y: 0.8))
+        XCTAssertTrue(ScreenAnnotationPolicy.acceptsViewer(laser, session: "share-1", senderIsParticipant: true,
+                                                           hostEnabled: true, lastSequence: nil))
+        XCTAssertFalse(ScreenAnnotationPolicy.acceptsViewer(laser, session: "share-1", senderIsParticipant: true,
+                                                            hostEnabled: false, lastSequence: nil))
+        let broadcast = ScreenAnnotationMessage(session: "share-1", sequence: 2, kind: .laser,
+                                                point: .init(x: 0.4, y: 0.7), participantIdentity: "viewer")
+        XCTAssertTrue(ScreenAnnotationPolicy.acceptsBroadcast(broadcast, session: "share-1", senderIsSharer: true,
+                                                              authorIsParticipant: true, lastSequence: 1))
+        XCTAssertFalse(ScreenAnnotationPolicy.acceptsBroadcast(broadcast, session: "share-1", senderIsSharer: false,
+                                                               authorIsParticipant: true, lastSequence: 1))
+    }
+
     func testAnnotationBookBoundsStrokesAndClearsOneParticipant() {
         var book = ScreenAnnotationBook()
         for _ in 0..<300 {
@@ -49,6 +64,18 @@ final class ScreenAnnotationsTests: XCTestCase {
         XCTAssertEqual(book.strokes.map(\.participantIdentity), ["other"])
         book.clear()
         XCTAssertTrue(book.strokes.isEmpty)
+    }
+
+    func testLaserExpiresAndParticipantClearRemovesBothLaserAndStrokes() {
+        var book = ScreenAnnotationBook()
+        book.add(.init(x: 0.5, y: 0.5), strokeID: "mark", participantIdentity: "viewer")
+        book.setLaser(.init(x: 0.25, y: 0.75), participantIdentity: "viewer", now: 10)
+        XCTAssertEqual(book.lasers["viewer"]?.point, .init(x: 0.25, y: 0.75))
+        book.setLaser(.init(x: 0.7, y: 0.2), participantIdentity: "other", now: 10 + ScreenAnnotationBook.laserLifetime + 0.01)
+        XCTAssertNil(book.lasers["viewer"], "An expired laser must not remain when the next update arrives")
+        book.clear(participantIdentity: "other")
+        XCTAssertTrue(book.lasers.isEmpty)
+        XCTAssertEqual(book.strokes.map(\.participantIdentity), ["viewer"])
     }
 
     func testAnnotationRateLimiterCapsBurstsPerParticipant() {

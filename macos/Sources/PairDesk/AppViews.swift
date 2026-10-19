@@ -64,6 +64,7 @@ struct SharedScreenWindow: View {
     @State private var permissions = false
     @State private var sourcePicker = false
     @State private var annotationMode = false
+    @State private var laserMode = false
     @State private var annotationStrokeID: String?
     private var shareStatus: String? {
         guard let sharer = rtc.activeSharerIdentity else { return nil }
@@ -122,16 +123,29 @@ struct SharedScreenWindow: View {
                 .accessibilityLabel(rtc.isMicrophoneEnabled ? "Mute microphone" : "Unmute microphone")
                 Button {
                     annotationMode.toggle()
+                    laserMode = false
                     annotationStrokeID = nil
                 } label: {
-                    Label(annotationMode ? "Done marking" : "Mark screen",
+                    Label(annotationMode ? "Done" : "Draw",
                           systemImage: annotationMode ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
                 }
                 .buttonStyle(.bordered)
                 .tint(annotationMode ? Theme.accent : nil)
                 .disabled(!rtc.canAnnotateScreen)
                 .help(rtc.annotationsAllowed ? "Draw temporary marks on the shared screen" : "The sharer disabled annotations")
-                if !rtc.screenAnnotations.isEmpty {
+                Button {
+                    laserMode.toggle()
+                    annotationMode = false
+                    annotationStrokeID = nil
+                } label: {
+                    Image(systemName: laserMode ? "scope" : "dot.scope")
+                }
+                .buttonStyle(.bordered)
+                .tint(laserMode ? Theme.accent : nil)
+                .disabled(!rtc.canAnnotateScreen)
+                .accessibilityLabel(laserMode ? "Done pointing" : "Laser pointer")
+                .help("Point at the screen with a temporary, color-coded laser. It fades automatically.")
+                if !rtc.screenAnnotations.isEmpty || !rtc.screenAnnotationLasers.isEmpty {
                     Button("Clear marks") { rtc.clearScreenAnnotations() }
                         .buttonStyle(.bordered)
                         .help("Clear your marks" + (rtc.isSharing ? " from the shared screen" : ""))
@@ -223,9 +237,12 @@ struct SharedScreenWindow: View {
                                             let names = Dictionary(uniqueKeysWithValues: rtc.participants.map { ($0.identity, $0.name) })
                                             ScreenAnnotationLayer(strokes: rtc.screenAnnotations, names: names, contentSize: contentSize)
                                                 .allowsHitTesting(false)
-                                            if annotationMode && rtc.canAnnotateScreen {
+                                            ScreenAnnotationLaserLayer(lasers: rtc.screenAnnotationLasers, names: names, contentSize: contentSize)
+                                                .allowsHitTesting(false)
+                                            if (annotationMode || laserMode) && rtc.canAnnotateScreen {
                                                 ScreenAnnotationInputLayer(rtc: rtc, contentSize: contentSize,
-                                                                           strokeID: $annotationStrokeID)
+                                                                           strokeID: $annotationStrokeID,
+                                                                           laserMode: laserMode)
                                             }
                                             if rtc.usesIndependentCursors {
                                                 let pointers = rtc.remotePointers + localPointer
@@ -272,7 +289,7 @@ struct SharedScreenWindow: View {
             if offerID != nil { showClipboard = true }
         }
         .onChange(of: rtc.canAnnotateScreen) { _, canAnnotate in
-            if !canAnnotate { annotationMode = false; annotationStrokeID = nil }
+            if !canAnnotate { annotationMode = false; laserMode = false; annotationStrokeID = nil }
         }
         .sheet(isPresented: $permissions) { PermissionsView() }
         .sheet(isPresented: $sourcePicker) { ScreenSharePickerView(store: store) }
@@ -314,6 +331,7 @@ private struct ScreenAnnotationInputLayer: View {
     @ObservedObject var rtc: RTCService
     let contentSize: CGSize
     @Binding var strokeID: String?
+    let laserMode: Bool
 
     var body: some View {
         GeometryReader { geometry in
@@ -322,6 +340,10 @@ private struct ScreenAnnotationInputLayer: View {
                     .onChanged { value in
                         guard let point = ScreenCoordinateMapper.normalized(point: value.location,
                             container: CGRect(origin: .zero, size: geometry.size), contentSize: contentSize) else { return }
+                        if laserMode {
+                            rtc.setScreenAnnotationLaser(ScreenAnnotationPoint(x: point.x, y: point.y))
+                            return
+                        }
                         if strokeID == nil { strokeID = UUID().uuidString }
                         if let strokeID {
                             rtc.addScreenAnnotationPoint(ScreenAnnotationPoint(x: point.x, y: point.y), strokeID: strokeID)
