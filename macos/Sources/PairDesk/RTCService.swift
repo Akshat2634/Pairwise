@@ -83,6 +83,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     @Published private(set) var localMicrophoneLevel = 0.0
     @Published private(set) var screenNetworkQuality: ScreenNetworkQuality = .measuring
     @Published private(set) var screenStreamMetrics = ScreenStreamMetrics()
+    @Published private(set) var screenTimeToFirstFrameMilliseconds: Int?
     @Published private(set) var screenShareQuality = ScreenShareQuality.load()
     @Published private(set) var adaptiveQualityEnabled = (UserDefaults.standard.object(forKey: "adaptiveShareQualityEnabled") as? Bool) ?? true
     @Published private(set) var adaptiveShareStatus: String?
@@ -495,6 +496,15 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                                                   packetsReceived: video?.packetsReceived,
                                                   packetsLost: video?.packetsLost)
         sendViewerQualityFeedback()
+    }
+
+    func recordScreenFirstFrame(milliseconds: Int) {
+        guard (0...120_000).contains(milliseconds) else { return }
+        screenTimeToFirstFrameMilliseconds = milliseconds
+    }
+
+    func resetScreenFirstFrameMeasurement() {
+        screenTimeToFirstFrameMilliseconds = nil
     }
 
     private func sendViewerQualityFeedback() {

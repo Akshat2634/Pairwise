@@ -26,6 +26,7 @@ enum SupportDiagnostics {
         Microphone: \(rtc.isMicrophoneEnabled ? "on" : "off")
         Screen RTT: \(rtc.screenNetworkQuality.label)
         Received screen stream: \(rtc.screenStreamMetrics.summary)
+        Screen time to first rendered frame: \(rtc.screenTimeToFirstFrameMilliseconds.map { "\($0) ms" } ?? "unavailable")
         Selected ICE route: \(route)
         Current error category: \(errorCategory)
 

@@ -7,7 +7,7 @@ struct InteractiveScreenView: NSViewRepresentable {
     @ObservedObject var rtc: RTCService
     func makeNSView(context: Context) -> ScreenCanvas { ScreenCanvas(rtc: rtc) }
     func updateNSView(_ view: ScreenCanvas, context: Context) {
-        view.video.track = track
+        view.setTrack(track)
         // Keep the viewer interactive while the host grants control. Without
         // this, a denied first request leaves no path to request again after
         // Accessibility is enabled during the same share.
@@ -18,6 +18,7 @@ struct InteractiveScreenView: NSViewRepresentable {
     static func dismantleNSView(_ view: ScreenCanvas, coordinator: ()) {
         if view.driving { view.rtc?.releaseHeldInputs() }
         view.stopCursorPresence()
+        view.firstFrameTask?.cancel()
         view.video.track = nil
     }
 }
@@ -32,6 +33,8 @@ final class ScreenCanvas: NSView {
     }
     private var lastCursorPoint: CGPoint?
     private var cursorPresenceTask: Task<Void, Never>?
+    fileprivate var firstFrameTask: Task<Void, Never>?
+    private var firstFrameStartedAt: TimeInterval?
     private static let transparentCursor = NSCursor(image: NSImage(size: NSSize(width: 16, height: 16)), hotSpot: .zero)
     private var tracking: NSTrackingArea?
     override var isFlipped: Bool { true }
@@ -44,6 +47,26 @@ final class ScreenCanvas: NSView {
         addSubview(video)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+    func setTrack(_ track: VideoTrack) {
+        guard video.track !== track else { return }
+        firstFrameTask?.cancel()
+        rtc?.resetScreenFirstFrameMeasurement()
+        firstFrameStartedAt = ProcessInfo.processInfo.systemUptime
+        video.track = track
+        let startedAt = firstFrameStartedAt
+        firstFrameTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self, let startedAt else { return }
+                if self.video.didRenderFirstFrame {
+                    let elapsed = max(0, ProcessInfo.processInfo.systemUptime - startedAt)
+                    self.rtc?.recordScreenFirstFrame(milliseconds: Int((elapsed * 1_000).rounded()))
+                    self.firstFrameTask = nil
+                    return
+                }
+                do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+            }
+        }
+    }
     override func layout() { super.layout(); video.frame = bounds }
     override func resetCursorRects() {
         super.resetCursorRects()
