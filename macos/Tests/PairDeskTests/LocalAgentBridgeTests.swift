@@ -5,6 +5,33 @@ import Darwin
 
 @MainActor
 final class LocalAgentBridgeTests: XCTestCase {
+    func testScreenshotIsSeparateGrantAndOnlyContentFreeAuditIsWritten() throws {
+        let audit = URL(fileURLWithPath: "/tmp/pdb-audit-\(UUID().uuidString).jsonl")
+        let image = Data([0x89, 0x50, 0x4e, 0x47])
+        let state = AgentBridgeState(auditURL: audit, screenshotProvider: { .success(image) })
+        state.update(callID: "call-1", participants: [], transcript: [])
+        state.authorize(token: "screen-token", capabilities: ["participants"])
+        let denied = state.handle(AgentBridgeRequest(token: "screen-token", method: "screenshot"))
+        XCTAssertFalse(denied.ok)
+
+        state.authorize(token: "screen-token", capabilities: ["screenshot"])
+        let allowed = state.handle(AgentBridgeRequest(token: "screen-token", method: "screenshot"))
+        XCTAssertTrue(allowed.ok)
+        let encodedResponse = try JSONEncoder().encode(allowed)
+        let responseJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: encodedResponse) as? [String: Any])
+        let result = try XCTUnwrap(responseJSON["result"] as? [String: Any])
+        XCTAssertEqual(result["mimeType"] as? String, "image/png")
+        XCTAssertEqual(result["data"] as? String, image.base64EncodedString())
+
+        state.revoke(reason: "test")
+        let expired = state.handle(AgentBridgeRequest(token: "screen-token", method: "screenshot"))
+        XCTAssertFalse(expired.ok)
+        let auditText = try String(contentsOf: audit, encoding: .utf8)
+        XCTAssertTrue(auditText.contains("screenshot"))
+        XCTAssertFalse(auditText.contains(image.base64EncodedString()))
+        try? FileManager.default.removeItem(at: audit)
+    }
+
     func testSocketRequiresGrantedCapabilityAndRevokesImmediately() throws {
         let root = URL(fileURLWithPath: "/tmp/pdb-\(UUID().uuidString)", isDirectory: true)
         let socket = root.appendingPathComponent("agent.sock")
@@ -38,6 +65,22 @@ final class LocalAgentBridgeTests: XCTestCase {
         bridge.update(callID: nil, participants: [], transcript: [])
         XCTAssertThrowsError(try request(socket: socket.path, token: secondCredential, method: "participants"))
         XCTAssertNil(bridge.credential)
+    }
+
+    func testSocketFramesLargeScreenshotResponsesBeyondLegacyReadBuffer() throws {
+        let root = URL(fileURLWithPath: "/tmp/pdb-image-\(UUID().uuidString)", isDirectory: true)
+        let socket = root.appendingPathComponent("agent.sock")
+        let payload = Data(repeating: 0x5a, count: 256 * 1024)
+        let bridge = LocalAgentBridge(socketURL: socket, auditURL: root.appendingPathComponent("audit.jsonl"),
+                                      screenshotProvider: { .success(payload) })
+        bridge.update(callID: "call-1", participants: [], transcript: [])
+        let credential = try XCTUnwrap(bridge.authorize(capabilities: ["screenshot"]))
+        defer { bridge.revoke(); try? FileManager.default.removeItem(at: root) }
+
+        let response = try request(socket: socket.path, token: credential, method: "screenshot")
+        XCTAssertEqual(response["ok"] as? Bool, true)
+        let result = try XCTUnwrap(response["result"] as? [String: Any])
+        XCTAssertEqual((result["data"] as? String)?.count, payload.base64EncodedString().count)
     }
 
     private func runUnauthorizedMCPClient(socket: String) throws {
@@ -92,9 +135,17 @@ final class LocalAgentBridgeTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: ["token": token, "method": method]) + Data([0x0a])
         let wrote = data.withUnsafeBytes { write(fd, $0.baseAddress, data.count) }
         guard wrote == data.count else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
-        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-        let count = read(fd, &buffer, buffer.count)
-        guard count > 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
-        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(buffer.prefix(count))) as? [String: Any])
+        var response = Data()
+        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+        while response.count < 4 * 1024 * 1024 {
+            let count = read(fd, &chunk, chunk.count)
+            guard count > 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+            if let newline = chunk[..<count].firstIndex(of: 0x0a) {
+                response.append(contentsOf: chunk[..<newline])
+                break
+            }
+            response.append(contentsOf: chunk[..<count])
+        }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: response) as? [String: Any])
     }
 }

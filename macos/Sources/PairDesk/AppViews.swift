@@ -443,6 +443,7 @@ private struct TranscriptPanel: View {
     @ObservedObject var bridge: LocalAgentBridge
     @State private var allowParticipants = false
     @State private var allowTranscript = false
+    @State private var allowScreenshot = false
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack { Text("Local transcript").font(.system(size: 14, weight: .semibold)); Spacer(); Image(systemName: "lock").font(.system(size: 11)).foregroundStyle(Theme.accent) }
@@ -469,6 +470,12 @@ private struct TranscriptPanel: View {
             Text("Only this Mac · active call only · read only").font(.system(size: 10)).foregroundStyle(Theme.textMuted)
             Toggle("Participant names", isOn: $allowParticipants).toggleStyle(.switch).font(.system(size: 11)).disabled(bridge.isEnabled)
             Toggle("Transcript text", isOn: $allowTranscript).toggleStyle(.switch).font(.system(size: 11)).disabled(bridge.isEnabled)
+            Toggle("One-time window screenshots", isOn: $allowScreenshot).toggleStyle(.switch).font(.system(size: 11)).disabled(bridge.isEnabled)
+            Text("Each screenshot request opens Apple's window picker. Only the window you select is sent, once, to the local agent.")
+                .font(.system(size: 9)).foregroundStyle(Theme.textMuted).fixedSize(horizontal: false, vertical: true)
+            if let activity = bridge.screenshotActivity {
+                Text(activity).font(.system(size: 9)).foregroundStyle(Theme.accent).fixedSize(horizontal: false, vertical: true)
+            }
             if bridge.isEnabled, let token = bridge.credential {
                 Text("Access is enabled for this call. The selected context may be sent to your configured model provider by the agent.")
                     .font(.system(size: 10)).foregroundStyle(Theme.textMuted).fixedSize(horizontal: false, vertical: true)
@@ -477,11 +484,12 @@ private struct TranscriptPanel: View {
             } else {
                 Button("Enable local agent access") {
                     _ = bridge.authorize(capabilities: Set([allowParticipants ? "participants" : nil,
-                                                            allowTranscript ? "transcript" : nil].compactMap { $0 }))
-                }.buttonStyle(.borderedProminent).disabled(!allowParticipants && !allowTranscript)
+                                                            allowTranscript ? "transcript" : nil,
+                                                            allowScreenshot ? "screenshot" : nil].compactMap { $0 }))
+                }.buttonStyle(.borderedProminent).disabled(!allowParticipants && !allowTranscript && !allowScreenshot)
             }
-            if !bridge.isEnabled && (!allowParticipants || !allowTranscript) {
-                Text("Each capability is optional. Screenshots, audio, screen streams, and remote control are not exposed.")
+            if !bridge.isEnabled && (!allowParticipants || !allowTranscript || !allowScreenshot) {
+                Text("Each capability is optional. Audio, screen streams, and remote control are not exposed.")
                     .font(.system(size: 9)).foregroundStyle(Theme.textMuted).fixedSize(horizontal: false, vertical: true)
             }
         }.padding(20)
