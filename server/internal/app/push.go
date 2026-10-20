@@ -278,32 +278,45 @@ func (s *Server) deliverPushJobsWithSender(ctx context.Context, sender PushSende
 		s.store.unlock()
 
 		if !now.Before(job.ExpiresAt) || !active || !deviceExists || device.Platform != job.Platform {
-			s.finishPushJob(job.ID)
+			if !s.finishPushJob(job.ID) {
+				return
+			}
 			continue
 		}
 		jobCtx, cancel := context.WithDeadline(ctx, job.ExpiresAt)
 		err := sender.Send(jobCtx, device, job.Event, job.CallID, job.ExpiresAt)
 		cancel()
 		if err == nil {
-			s.finishPushJob(job.ID)
+			if !s.finishPushJob(job.ID) {
+				return
+			}
 			continue
 		}
 		var invalidToken *InvalidPushTokenError
 		if errors.As(err, &invalidToken) {
-			s.deactivateInvalidPushToken(device, job.Event)
+			if !s.deactivateInvalidPushToken(device, job.Event) {
+				s.retryPushJob(job)
+				return
+			}
 			log.Printf("push registration deactivated platform=%s event=%s", device.Platform, job.Event)
-			s.finishPushJob(job.ID)
+			if !s.finishPushJob(job.ID) {
+				return
+			}
 			continue
 		}
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			if ctx.Err() != nil {
 				return
 			}
-			s.finishPushJob(job.ID)
+			if !s.finishPushJob(job.ID) {
+				return
+			}
 			continue
 		}
 		log.Printf("push delivery failed platform=%s event=%s", device.Platform, job.Event)
-		s.retryPushJob(job)
+		if !s.retryPushJob(job) {
+			return
+		}
 	}
 }
 
@@ -326,26 +339,28 @@ func (s *Server) pushJobActiveLocked(job PushJob) bool {
 	}
 }
 
-func (s *Server) finishPushJob(id string) {
+func (s *Server) finishPushJob(id string) bool {
 	s.store.lock()
 	defer s.store.unlock()
 	job, exists := s.store.s.PushJobs[id]
 	if !exists {
-		return
+		return true
 	}
 	delete(s.store.s.PushJobs, id)
 	if err := s.store.save(); err != nil {
 		s.store.s.PushJobs[id] = job
 		log.Printf("push outbox update failed event=%s", job.Event)
+		return false
 	}
+	return true
 }
 
-func (s *Server) retryPushJob(job PushJob) {
+func (s *Server) retryPushJob(job PushJob) bool {
 	s.store.lock()
 	defer s.store.unlock()
 	current, exists := s.store.s.PushJobs[job.ID]
 	if !exists {
-		return
+		return true
 	}
 	previous := current
 	current.Attempts++
@@ -359,19 +374,21 @@ func (s *Server) retryPushJob(job PushJob) {
 	if err := s.store.save(); err != nil {
 		s.store.s.PushJobs[job.ID] = previous
 		log.Printf("push outbox retry update failed event=%s", job.Event)
+		return false
 	}
+	return true
 }
 
 // deactivateInvalidPushToken clears only the token used by the failed send.
 // A concurrent token refresh wins because the value must still match the
 // failed registration snapshot before it is changed.
-func (s *Server) deactivateInvalidPushToken(device DeviceRegistration, event string) {
+func (s *Server) deactivateInvalidPushToken(device DeviceRegistration, event string) bool {
 	s.store.lock()
 	defer s.store.unlock()
 	key := deviceKey(device.UserID, device.DeviceID)
 	current, exists := s.store.s.Devices[key]
 	if !exists {
-		return
+		return true
 	}
 	previous := current
 	changed := false
@@ -387,7 +404,7 @@ func (s *Server) deactivateInvalidPushToken(device DeviceRegistration, event str
 		changed = true
 	}
 	if !changed {
-		return
+		return false
 	}
 	if current.PushToken == "" && current.VoIPToken == "" {
 		delete(s.store.s.Devices, key)
@@ -397,7 +414,9 @@ func (s *Server) deactivateInvalidPushToken(device DeviceRegistration, event str
 	if err := s.store.save(); err != nil {
 		s.store.s.Devices[key] = previous
 		log.Printf("push registration cleanup failed platform=%s event=%s", device.Platform, event)
+		return false
 	}
+	return true
 }
 
 func sendWithRetry(ctx context.Context, sender PushSender, device DeviceRegistration, event, callID string, expires time.Time) error {
