@@ -724,6 +724,12 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                 }
                 captureFilter = exclusionFilter ?? contentFilter
             }
+            // Show the local-only veil state before the first captured frame
+            // can be published. If capture or publication fails, the catch
+            // path clears this value before returning to the caller.
+            privacyVeilAppNames = Array(Set(excludingApplications.map(\.applicationName))).sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            }
             let canControlDisplay = selectedFrame != nil && AXIsProcessTrusted()
             // Older viewers infer view-only from the ".window" suffix; newer
             // ones also receive explicit availability messages.
@@ -754,9 +760,6 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             shareBounds = selectedWindow ? nil : selectedFrame
             setCursorSession(selectedFrame == nil ? nil : UUID().uuidString)
             shareIsWindow = selectedWindow
-            privacyVeilAppNames = Array(Set(excludingApplications.map(\.applicationName))).sorted {
-                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-            }
             remoteControlAvailable = !shareIsWindow && privacyVeilAppNames.isEmpty && canControlDisplay
             remoteControlManuallyPaused = false
             automaticControlEnabled = remoteControlAvailable
