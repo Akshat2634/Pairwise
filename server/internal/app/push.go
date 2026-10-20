@@ -30,6 +30,14 @@ type PushSender interface {
 	Send(context.Context, DeviceRegistration, string, string, time.Time) error
 }
 
+// InvalidPushTokenError marks provider responses that prove one registration
+// token is no longer valid. Other provider failures remain retryable.
+type InvalidPushTokenError struct{ provider string }
+
+func (e *InvalidPushTokenError) Error() string {
+	return e.provider + " rejected an invalid device token"
+}
+
 type configuredPushSender struct {
 	apns *apnsSender
 	fcm  *fcmSender
@@ -195,12 +203,56 @@ func (s *Server) notify(userIDs []string, event, callID string, expires time.Tim
 			}
 			s.store.unlock()
 			for _, d := range devices {
-				if err := sendWithRetry(ctx, sender, d, event, callID, expires); err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-					log.Printf("push delivery failed platform=%s event=%s: %v", d.Platform, event, err)
+				if err := sendWithRetry(ctx, sender, d, event, callID, expires); err != nil {
+					var invalidToken *InvalidPushTokenError
+					if errors.As(err, &invalidToken) {
+						s.deactivateInvalidPushToken(d, event)
+						log.Printf("push registration deactivated platform=%s event=%s", d.Platform, event)
+					} else if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+						log.Printf("push delivery failed platform=%s event=%s: %v", d.Platform, event, err)
+					}
 				}
 			}
 		}
 	}()
+}
+
+// deactivateInvalidPushToken clears only the token used by the failed send.
+// A concurrent token refresh wins because the value must still match the
+// failed registration snapshot before it is changed.
+func (s *Server) deactivateInvalidPushToken(device DeviceRegistration, event string) {
+	s.store.lock()
+	defer s.store.unlock()
+	key := deviceKey(device.UserID, device.DeviceID)
+	current, exists := s.store.s.Devices[key]
+	if !exists {
+		return
+	}
+	previous := current
+	changed := false
+	switch {
+	case device.Platform == "ios" && event == "direct_call" && current.VoIPToken == device.VoIPToken:
+		current.VoIPToken = ""
+		changed = true
+	case device.Platform == "ios" && event == "join_request" && current.PushToken == device.PushToken:
+		current.PushToken = ""
+		changed = true
+	case device.Platform == "android" && current.PushToken == device.PushToken:
+		current.PushToken = ""
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	if current.PushToken == "" && current.VoIPToken == "" {
+		delete(s.store.s.Devices, key)
+	} else {
+		s.store.s.Devices[key] = current
+	}
+	if err := s.store.save(); err != nil {
+		s.store.s.Devices[key] = previous
+		log.Printf("push registration cleanup failed platform=%s event=%s", device.Platform, event)
+	}
 }
 
 func sendWithRetry(ctx context.Context, sender PushSender, device DeviceRegistration, event, callID string, expires time.Time) error {
@@ -304,10 +356,17 @@ func (a *apnsSender) send(ctx context.Context, token, topic, pushType string, pa
 		return err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var body struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body)
+		if resp.StatusCode == http.StatusGone || (resp.StatusCode == http.StatusBadRequest && body.Reason == "BadDeviceToken") {
+			return &InvalidPushTokenError{provider: "APNs"}
+		}
 		return fmt.Errorf("APNs returned HTTP %d", resp.StatusCode)
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return nil
 }
 
@@ -402,9 +461,23 @@ func (f *fcmSender) send(ctx context.Context, token, event, callID string, expir
 		return err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var body struct {
+			Error struct {
+				Status  string `json:"status"`
+				Details []struct {
+					ErrorCode string `json:"errorCode"`
+				} `json:"details"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body)
+		for _, detail := range body.Error.Details {
+			if detail.ErrorCode == "UNREGISTERED" {
+				return &InvalidPushTokenError{provider: "FCM"}
+			}
+		}
 		return fmt.Errorf("FCM returned HTTP %d", resp.StatusCode)
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return nil
 }
