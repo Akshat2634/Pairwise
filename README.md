@@ -86,7 +86,7 @@ The LiveKit integration test needs a running local stack and is exercised separa
 
 Read [the architecture notes](docs/architecture.md), [feature parity roadmap](docs/feature-parity.md), [release guide](docs/releasing.md), [self-hosting guide](docs/self-hosting.md), and [third-party notices](THIRD_PARTY_NOTICES.md) before operating a public server or redistributing a binary.
 
-PairDesk's opt-in, read-only local coding-agent bridge is documented in [docs/local-agent-bridge.md](docs/local-agent-bridge.md). It exposes only separately granted participant names and local transcript text during a call; screenshot access is not implemented.
+PairDesk's opt-in, read-only local coding-agent bridge is documented in [docs/local-agent-bridge.md](docs/local-agent-bridge.md). During a call, it can expose separately granted participant names, local transcript text, and on-demand still screenshots from a window the user selects in Apple's native picker. Screenshots are returned only to the local MCP client and are not stored by PairDesk.
 
 See [docs/media-quality-benchmarks.md](docs/media-quality-benchmarks.md) for the CI synthetic benchmark scope and the separate physical Mac reference procedure.
 
