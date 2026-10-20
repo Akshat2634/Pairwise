@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +104,41 @@ func configuredPushFromEnv() PushSender {
 
 func deviceKey(userID, deviceID string) string { return userID + ":" + deviceID }
 
+// enqueuePushJobsLocked is called while the store lock is held so the event
+// that created the invitation and its delivery jobs are committed together in
+// the same atomic state-file replacement.
+func (s *Server) enqueuePushJobsLocked(userIDs []string, event, callID, requestID string, expires time.Time) []string {
+	if s.push == nil || callID == "" || !time.Now().Before(expires) {
+		return nil
+	}
+	added := []string{}
+	seenUsers := map[string]bool{}
+	for _, userID := range userIDs {
+		if userID == "" || seenUsers[userID] {
+			continue
+		}
+		seenUsers[userID] = true
+		for _, device := range s.store.s.Devices {
+			if device.UserID != userID {
+				continue
+			}
+			notificationID := requestID
+			if notificationID == "" {
+				notificationID = callID
+			}
+			key := strings.Join([]string{event, notificationID, userID, device.DeviceID}, "\x00")
+			digest := sha256.Sum256([]byte(key))
+			id := hex.EncodeToString(digest[:])
+			if _, exists := s.store.s.PushJobs[id]; exists {
+				continue
+			}
+			s.store.s.PushJobs[id] = PushJob{ID: id, UserID: userID, DeviceID: device.DeviceID, Platform: device.Platform, Event: event, CallID: callID, RequestID: requestID, ExpiresAt: expires, NextAttemptAt: time.Now().UTC()}
+			added = append(added, id)
+		}
+	}
+	return added
+}
+
 func (s *Server) devices(w http.ResponseWriter, r *http.Request, u User) {
 	switch r.Method {
 	case http.MethodPost:
@@ -182,51 +219,179 @@ func (s *Server) devices(w http.ResponseWriter, r *http.Request, u User) {
 	}
 }
 
-// notify is best-effort so a provider outage never changes desktop call API
-// behavior. The event ID is the only application data sent to push providers.
-func (s *Server) notify(userIDs []string, event, callID string, expires time.Time) {
-	sender := s.push
-	if sender == nil || len(userIDs) == 0 || callID == "" {
+// notify wakes the durable outbox worker. Jobs are enqueued before the call
+// transaction is saved, so process restarts replay undelivered notifications.
+func (s *Server) notify(_ []string, _ string, _ string, _ time.Time) {
+	if s.push == nil {
 		return
 	}
-	ids := append([]string(nil), userIDs...)
-	go func() {
-		ctx, cancel := context.WithDeadline(context.Background(), expires)
-		defer cancel()
-		for _, userID := range ids {
-			s.store.lock()
-			devices := []DeviceRegistration{}
-			for _, d := range s.store.s.Devices {
-				if d.UserID == userID {
-					devices = append(devices, d)
-				}
-			}
-			s.store.unlock()
-			for _, d := range devices {
-				if err := sendWithRetry(ctx, sender, d, event, callID, expires); err != nil {
-					var invalidToken *InvalidPushTokenError
-					if errors.As(err, &invalidToken) {
-						s.deactivateInvalidPushToken(d, event)
-						log.Printf("push registration deactivated platform=%s event=%s", d.Platform, event)
-					} else if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-						log.Printf("push delivery failed platform=%s event=%s: %v", d.Platform, event, err)
-					}
-				}
+	select {
+	case s.pushWake <- struct{}{}:
+	default:
+	}
+}
+
+// RunPushWorker replays outstanding jobs on startup and polls for retryable
+// failures. The production deployment uses one API writer backed by its
+// persistent data volume; the state and outbox are replaced atomically.
+func (s *Server) RunPushWorker(ctx context.Context) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		s.deliverPushJobs(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.pushWake:
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Server) deliverPushJobs(ctx context.Context) {
+	s.deliverPushJobsWithSender(ctx, s.push)
+}
+
+func (s *Server) deliverPushJobsWithSender(ctx context.Context, sender PushSender) {
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	if sender == nil {
+		return
+	}
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		s.store.lock()
+		jobs := make([]PushJob, 0, len(s.store.s.PushJobs))
+		now := time.Now().UTC()
+		for _, job := range s.store.s.PushJobs {
+			if !now.Before(job.NextAttemptAt) || !now.Before(job.ExpiresAt) {
+				jobs = append(jobs, job)
 			}
 		}
-	}()
+		if len(jobs) == 0 {
+			s.store.unlock()
+			return
+		}
+		sort.Slice(jobs, func(i, j int) bool { return jobs[i].NextAttemptAt.Before(jobs[j].NextAttemptAt) })
+		job := jobs[0]
+		device, deviceExists := s.store.s.Devices[deviceKey(job.UserID, job.DeviceID)]
+		active := s.pushJobActiveLocked(job)
+		s.store.unlock()
+
+		if !now.Before(job.ExpiresAt) || !active || !deviceExists || device.Platform != job.Platform {
+			if !s.finishPushJob(job.ID) {
+				return
+			}
+			continue
+		}
+		jobCtx, cancel := context.WithDeadline(ctx, job.ExpiresAt)
+		err := sender.Send(jobCtx, device, job.Event, job.CallID, job.ExpiresAt)
+		cancel()
+		if err == nil {
+			if !s.finishPushJob(job.ID) {
+				return
+			}
+			continue
+		}
+		var invalidToken *InvalidPushTokenError
+		if errors.As(err, &invalidToken) {
+			if !s.deactivateInvalidPushToken(device, job.Event) {
+				s.retryPushJob(job)
+				return
+			}
+			log.Printf("push registration deactivated platform=%s event=%s", device.Platform, job.Event)
+			if !s.finishPushJob(job.ID) {
+				return
+			}
+			continue
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			if ctx.Err() != nil {
+				return
+			}
+			if !s.finishPushJob(job.ID) {
+				return
+			}
+			continue
+		}
+		log.Printf("push delivery failed platform=%s event=%s", device.Platform, job.Event)
+		if !s.retryPushJob(job) {
+			return
+		}
+	}
+}
+
+// pushJobActiveLocked prevents an expired invitation or resolved join request
+// from being delivered after a restart or a slow provider retry.
+func (s *Server) pushJobActiveLocked(job PushJob) bool {
+	user, enabled := s.store.s.Users[job.UserID]
+	if !enabled || !user.Enabled {
+		return false
+	}
+	switch job.Event {
+	case "direct_call":
+		invite, exists := s.store.s.Calls[job.CallID]
+		return exists && invite.Status == callPending && invite.TargetID == job.UserID && time.Now().Before(invite.ExpiresAt)
+	case "join_request":
+		request, exists := s.store.s.JoinRequests[job.RequestID]
+		return exists && request.Status == "pending" && request.RoomID == job.CallID && time.Now().Before(request.ExpiresAt)
+	default:
+		return false
+	}
+}
+
+func (s *Server) finishPushJob(id string) bool {
+	s.store.lock()
+	defer s.store.unlock()
+	job, exists := s.store.s.PushJobs[id]
+	if !exists {
+		return true
+	}
+	delete(s.store.s.PushJobs, id)
+	if err := s.store.save(); err != nil {
+		s.store.s.PushJobs[id] = job
+		log.Printf("push outbox update failed event=%s", job.Event)
+		return false
+	}
+	return true
+}
+
+func (s *Server) retryPushJob(job PushJob) bool {
+	s.store.lock()
+	defer s.store.unlock()
+	current, exists := s.store.s.PushJobs[job.ID]
+	if !exists {
+		return true
+	}
+	previous := current
+	current.Attempts++
+	delay := time.Duration(1<<min(current.Attempts, 4)) * 250 * time.Millisecond
+	current.NextAttemptAt = time.Now().UTC().Add(delay)
+	if !time.Now().Before(current.ExpiresAt) {
+		delete(s.store.s.PushJobs, job.ID)
+	} else {
+		s.store.s.PushJobs[job.ID] = current
+	}
+	if err := s.store.save(); err != nil {
+		s.store.s.PushJobs[job.ID] = previous
+		log.Printf("push outbox retry update failed event=%s", job.Event)
+		return false
+	}
+	return true
 }
 
 // deactivateInvalidPushToken clears only the token used by the failed send.
 // A concurrent token refresh wins because the value must still match the
 // failed registration snapshot before it is changed.
-func (s *Server) deactivateInvalidPushToken(device DeviceRegistration, event string) {
+func (s *Server) deactivateInvalidPushToken(device DeviceRegistration, event string) bool {
 	s.store.lock()
 	defer s.store.unlock()
 	key := deviceKey(device.UserID, device.DeviceID)
 	current, exists := s.store.s.Devices[key]
 	if !exists {
-		return
+		return true
 	}
 	previous := current
 	changed := false
@@ -242,7 +407,7 @@ func (s *Server) deactivateInvalidPushToken(device DeviceRegistration, event str
 		changed = true
 	}
 	if !changed {
-		return
+		return false
 	}
 	if current.PushToken == "" && current.VoIPToken == "" {
 		delete(s.store.s.Devices, key)
@@ -252,7 +417,9 @@ func (s *Server) deactivateInvalidPushToken(device DeviceRegistration, event str
 	if err := s.store.save(); err != nil {
 		s.store.s.Devices[key] = previous
 		log.Printf("push registration cleanup failed platform=%s event=%s", device.Platform, event)
+		return false
 	}
+	return true
 }
 
 func sendWithRetry(ctx context.Context, sender PushSender, device DeviceRegistration, event, callID string, expires time.Time) error {

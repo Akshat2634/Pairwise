@@ -61,6 +61,18 @@ type DeviceRegistration struct {
 	VoIPToken string    `json:"voipToken,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
+type PushJob struct {
+	ID            string    `json:"id"`
+	UserID        string    `json:"userId"`
+	DeviceID      string    `json:"deviceId"`
+	Platform      string    `json:"platform"`
+	Event         string    `json:"event"`
+	CallID        string    `json:"callId"`
+	RequestID     string    `json:"requestId,omitempty"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+	NextAttemptAt time.Time `json:"nextAttemptAt"`
+	Attempts      int       `json:"attempts"`
+}
 type AdminAuditEvent struct {
 	ActorID    string    `json:"actorId"`
 	TargetID   string    `json:"targetId"`
@@ -75,6 +87,7 @@ type State struct {
 	Calls        map[string]CallInvitation     `json:"calls"`
 	JoinRequests map[string]CallJoinRequest    `json:"joinRequests,omitempty"`
 	Devices      map[string]DeviceRegistration `json:"devices,omitempty"`
+	PushJobs     map[string]PushJob            `json:"pushJobs,omitempty"`
 	AdminAudit   []AdminAuditEvent             `json:"adminAudit,omitempty"`
 }
 type Store struct {
@@ -84,7 +97,7 @@ type Store struct {
 }
 
 func OpenStore(path string) (*Store, error) {
-	st := &Store{path: path, s: State{Users: map[string]User{}, Sessions: map[string]Session{}, Rooms: map[string]Room{}, Presence: map[string]time.Time{}, Calls: map[string]CallInvitation{}, JoinRequests: map[string]CallJoinRequest{}, Devices: map[string]DeviceRegistration{}}}
+	st := &Store{path: path, s: State{Users: map[string]User{}, Sessions: map[string]Session{}, Rooms: map[string]Room{}, Presence: map[string]time.Time{}, Calls: map[string]CallInvitation{}, JoinRequests: map[string]CallJoinRequest{}, Devices: map[string]DeviceRegistration{}, PushJobs: map[string]PushJob{}}}
 	b, e := os.ReadFile(path)
 	if e == nil {
 		if e = json.Unmarshal(b, &st.s); e != nil {
@@ -110,6 +123,9 @@ func OpenStore(path string) (*Store, error) {
 		}
 		if st.s.Devices == nil {
 			st.s.Devices = map[string]DeviceRegistration{}
+		}
+		if st.s.PushJobs == nil {
+			st.s.PushJobs = map[string]PushJob{}
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return nil, e

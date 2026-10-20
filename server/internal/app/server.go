@@ -28,6 +28,8 @@ const maxRoom = 4
 type Server struct {
 	store                        *Store
 	push                         PushSender
+	pushWake                     chan struct{}
+	pushMu                       sync.Mutex
 	liveURL, liveKey, liveSecret string
 	liveAPIURL                   string
 	dummyHash                    []byte
@@ -41,7 +43,7 @@ func New(st *Store) *Server {
 	if apiURL == "" {
 		apiURL = "http://127.0.0.1:7880"
 	}
-	return &Server{store: st, push: configuredPushFromEnv(), liveURL: os.Getenv("LIVEKIT_URL"), liveAPIURL: apiURL, liveKey: os.Getenv("LIVEKIT_API_KEY"), liveSecret: os.Getenv("LIVEKIT_API_SECRET"), dummyHash: h, hits: map[string][]time.Time{}}
+	return &Server{store: st, push: configuredPushFromEnv(), pushWake: make(chan struct{}, 1), liveURL: os.Getenv("LIVEKIT_URL"), liveAPIURL: apiURL, liveKey: os.Getenv("LIVEKIT_API_KEY"), liveSecret: os.Getenv("LIVEKIT_API_SECRET"), dummyHash: h, hits: map[string][]time.Time{}}
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
