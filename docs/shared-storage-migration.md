@@ -27,7 +27,10 @@ using this design for a substantially larger deployment.
    into this repository or a committed `.env` file. The instance is currently
    reached through the Cloud SQL Auth Proxy. Production API connectivity still
    needs a workload identity and a deployment secret/configuration path before
-   cutover.
+cutover. A dedicated runtime service account is prepared as
+`pairdesk-api-runtime@named-tube-444103-p0.iam.gserviceaccount.com`; it has the
+Cloud SQL Client role and Secret Accessor on this database password secret.
+It is not yet attached to the production VM.
 3. Run `PAIRDESK_DATABASE_URL=... pairdesk-admin import-json --from
    /data/pairdesk.json`. Import replaces the singleton state atomically and
    preserves accounts, password hashes, sessions, device registrations, audit
@@ -64,10 +67,11 @@ protection enabled. This proves the Cloud SQL backup/restore path, not recovery
 of Pairwise production accounts: the live API has not been migrated and
 existing-user sign-in after a production data import has not yet been tested.
 
-Before cutover, attach a dedicated service account to the API VM (currently it
-has no attached service account), grant only the required Cloud SQL client and
-secret access, and configure the Cloud SQL Auth Proxy as a managed service or
-sidecar. Then follow the migration steps during a maintenance window, verify
+Before cutover, attach the prepared service account to the API VM (currently it
+has no attached service account) and configure the Cloud SQL Auth Proxy as a
+managed service or sidecar. Attaching an identity requires a VM stop/start and
+must be scheduled with the application maintenance window. Then follow the
+migration steps, verify
 health/readiness, existing-user login, presence, calls, and push outbox
 delivery, and retain the JSON export for rollback. Do not scale API replicas
 until the PostgreSQL-backed API and push worker pass the two-instance
