@@ -60,6 +60,12 @@ type DeviceRegistration struct {
 	VoIPToken string    `json:"voipToken,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
+type AdminAuditEvent struct {
+	ActorID    string    `json:"actorId"`
+	TargetID   string    `json:"targetId"`
+	Action     string    `json:"action"`
+	OccurredAt time.Time `json:"occurredAt"`
+}
 type State struct {
 	Users        map[string]User               `json:"users"`
 	Sessions     map[string]Session            `json:"sessions"`
@@ -68,6 +74,7 @@ type State struct {
 	Calls        map[string]CallInvitation     `json:"calls"`
 	JoinRequests map[string]CallJoinRequest    `json:"joinRequests,omitempty"`
 	Devices      map[string]DeviceRegistration `json:"devices,omitempty"`
+	AdminAudit   []AdminAuditEvent             `json:"adminAudit,omitempty"`
 }
 type Store struct {
 	mu   sync.Mutex
@@ -139,4 +146,20 @@ func (st *Store) save() error {
 		return e
 	}
 	return os.Rename(name, st.path)
+}
+
+func appendAdminAudit(state *State, actorID, targetID, action string) {
+	state.AdminAudit = append(state.AdminAudit, AdminAuditEvent{
+		ActorID: actorID, TargetID: targetID, Action: action, OccurredAt: time.Now().UTC(),
+	})
+	const maxAdminAuditEvents = 500
+	if len(state.AdminAudit) > maxAdminAuditEvents {
+		state.AdminAudit = append([]AdminAuditEvent(nil), state.AdminAudit[len(state.AdminAudit)-maxAdminAuditEvents:]...)
+	}
+}
+
+func (st *Store) ListAdminAudit() []AdminAuditEvent {
+	st.lock()
+	defer st.unlock()
+	return append([]AdminAuditEvent(nil), st.s.AdminAudit...)
 }

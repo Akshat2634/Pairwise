@@ -63,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/password", s.auth(s.changePassword))
 	mux.HandleFunc("/v1/admin/users", s.auth(s.adminCreateUser))
 	mux.HandleFunc("/v1/admin/users/", s.auth(s.adminUserAction))
+	mux.HandleFunc("/v1/admin/audit", s.auth(s.adminAudit))
 	mux.HandleFunc("/v1/rooms", s.auth(s.rooms))
 	mux.HandleFunc("/v1/rooms/", s.auth(s.roomAction))
 	mux.HandleFunc("/v1/calls", s.auth(s.calls))
@@ -327,7 +328,7 @@ func (s *Server) adminUserAction(w http.ResponseWriter, r *http.Request, admin U
 			fail(w, 400, "invalid request")
 			return
 		}
-		if err := s.store.SetUserEnabledByID(parts[0], q.Enabled); err != nil {
+		if err := s.store.SetUserEnabledByID(parts[0], q.Enabled, admin.ID); err != nil {
 			fail(w, 400, err.Error())
 			return
 		}
@@ -344,7 +345,7 @@ func (s *Server) adminUserAction(w http.ResponseWriter, r *http.Request, admin U
 			fail(w, 400, "new password must be between 12 and 1024 characters")
 			return
 		}
-		if err := s.store.SetUserPasswordByID(parts[0], q.NewPassword); err != nil {
+		if err := s.store.SetUserPasswordByID(parts[0], q.NewPassword, admin.ID); err != nil {
 			fail(w, 400, err.Error())
 			return
 		}
@@ -352,6 +353,18 @@ func (s *Server) adminUserAction(w http.ResponseWriter, r *http.Request, admin U
 	default:
 		fail(w, 404, "user action not found")
 	}
+}
+
+func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request, admin User) {
+	if !admin.Admin {
+		fail(w, 403, "admin access required")
+		return
+	}
+	if r.Method != http.MethodGet {
+		fail(w, 405, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": s.store.ListAdminAudit()})
 }
 func (s *Server) users(w http.ResponseWriter, r *http.Request, u User) {
 	if r.Method != "GET" {
@@ -807,7 +820,7 @@ func (s *Store) SetUserEnabled(email string, enabled bool) error {
 	defer s.unlock()
 	for id, u := range s.s.Users {
 		if strings.EqualFold(u.Email, email) {
-			return s.setUserEnabledLocked(id, u, enabled)
+			return s.setUserEnabledLocked(id, u, enabled, "system")
 		}
 	}
 	return errors.New("user not found")
@@ -824,17 +837,17 @@ func (s *Store) ListUsers() []User {
 	return users
 }
 
-func (s *Store) SetUserEnabledByID(id string, enabled bool) error {
+func (s *Store) SetUserEnabledByID(id string, enabled bool, actorID string) error {
 	s.lock()
 	defer s.unlock()
 	user, ok := s.s.Users[id]
 	if !ok {
 		return errors.New("user not found")
 	}
-	return s.setUserEnabledLocked(id, user, enabled)
+	return s.setUserEnabledLocked(id, user, enabled, actorID)
 }
 
-func (s *Store) setUserEnabledLocked(id string, user User, enabled bool) error {
+func (s *Store) setUserEnabledLocked(id string, user User, enabled bool, actorID string) error {
 	if user.Enabled == enabled {
 		return nil
 	}
@@ -853,6 +866,7 @@ func (s *Store) setUserEnabledLocked(id string, user User, enabled bool) error {
 	for token, session := range s.s.Sessions {
 		oldSessions[token] = session
 	}
+	oldAudit := append([]AdminAuditEvent(nil), s.s.AdminAudit...)
 	user.Enabled = enabled
 	s.s.Users[id] = user
 	if !enabled {
@@ -862,16 +876,18 @@ func (s *Store) setUserEnabledLocked(id string, user User, enabled bool) error {
 			}
 		}
 	}
+	appendAdminAudit(&s.s, actorID, id, "account."+map[bool]string{true: "enabled", false: "disabled"}[enabled])
 	if err := s.save(); err != nil {
 		user.Enabled = !enabled
 		s.s.Users[id] = user
 		s.s.Sessions = oldSessions
+		s.s.AdminAudit = oldAudit
 		return err
 	}
 	return nil
 }
 
-func (s *Store) SetUserPasswordByID(id, password string) error {
+func (s *Store) SetUserPasswordByID(id, password, actorID string) error {
 	if len(password) < 12 || len(password) > 1024 {
 		return errors.New("password must be between 12 and 1024 characters")
 	}
@@ -886,6 +902,7 @@ func (s *Store) SetUserPasswordByID(id, password string) error {
 		return errors.New("user not found")
 	}
 	previousHash := user.PasswordHash
+	previousAudit := append([]AdminAuditEvent(nil), s.s.AdminAudit...)
 	previousSessions := make(map[string]Session, len(s.s.Sessions))
 	for token, session := range s.s.Sessions {
 		previousSessions[token] = session
@@ -897,10 +914,12 @@ func (s *Store) SetUserPasswordByID(id, password string) error {
 			delete(s.s.Sessions, token)
 		}
 	}
+	appendAdminAudit(&s.s, actorID, id, "account.password_reset")
 	if err = s.save(); err != nil {
 		user.PasswordHash = previousHash
 		s.s.Users[id] = user
 		s.s.Sessions = previousSessions
+		s.s.AdminAudit = previousAudit
 		return err
 	}
 	return nil

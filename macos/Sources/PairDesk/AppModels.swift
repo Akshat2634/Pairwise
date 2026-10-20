@@ -11,6 +11,15 @@ struct TeamUser: Codable, Identifiable, Equatable {
     var initials: String { name.split(separator: " ").prefix(2).compactMap { $0.first }.map(String.init).joined().uppercased() }
 }
 
+struct AdminAuditEvent: Decodable, Identifiable, Equatable {
+    let actorId: String
+    let targetId: String
+    let action: String
+    let occurredAt: String
+    var id: String { "\(occurredAt)-\(action)-\(targetId)" }
+    var date: Date { ISO8601DateFormatter().date(from: occurredAt) ?? .distantPast }
+}
+
 struct PairRoom: Codable, Identifiable, Equatable {
     let id: String
     let name: String
@@ -21,6 +30,7 @@ struct PairRoom: Codable, Identifiable, Equatable {
 struct LoginResponse: Decodable { let token: String; let user: TeamUser; let expiresAt: String }
 struct MeResponse: Decodable { let user: TeamUser }
 struct UsersResponse: Decodable { let users: [TeamUser] }
+struct AdminAuditResponse: Decodable { let events: [AdminAuditEvent] }
 struct RoomsResponse: Decodable { let rooms: [PairRoom] }
 struct ActiveCallsResponse: Decodable { let calls: [PairRoom] }
 struct JoinRequestsResponse: Decodable { let requests: [CallJoinRequest] }
