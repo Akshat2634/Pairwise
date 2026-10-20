@@ -251,6 +251,68 @@ func TestAdminCanListResetAndDisableUsersWithoutExposingCredentialData(t *testin
 	}
 }
 
+func TestAdminDisableImmediatelyRemovesExistingLiveKitParticipant(t *testing.T) {
+	s, member := fixture(t)
+	memberToken := login(t, s)
+	admin, err := s.store.CreateUser("Admin", "admin@example.com", "correct-horse-battery", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminToken, _ := randomID(32)
+	s.store.lock()
+	s.store.s.Sessions[adminToken] = Session{admin.ID, time.Now().Add(time.Hour)}
+	s.store.s.Rooms["active-room"] = Room{
+		ID: "active-room", Members: map[string]Member{
+			member.ID: {UserID: member.ID, LastSeen: time.Now().UTC()},
+		},
+	}
+	if err := s.store.save(); err != nil {
+		s.store.unlock()
+		t.Fatal(err)
+	}
+	s.store.unlock()
+
+	var removedRoom, removedIdentity string
+	mediaStatus := http.StatusServiceUnavailable
+	media := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/RemoveParticipant") || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			http.Error(w, "unexpected media request", http.StatusBadRequest)
+			return
+		}
+		var request struct {
+			Room     string `json:"room"`
+			Identity string `json:"identity"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		removedRoom, removedIdentity = request.Room, request.Identity
+		w.WriteHeader(mediaStatus)
+	}))
+	defer media.Close()
+	s.liveAPIURL = media.URL
+
+	w := request(s.Handler(), "POST", "/v1/admin/users/"+member.ID+"/enabled", adminToken, `{"enabled":false}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("media outage should report incomplete revocation: %d %s", w.Code, w.Body)
+	}
+	if removedRoom != "active-room" || removedIdentity != member.ID {
+		t.Fatalf("failed revocation did not target active participant: room=%q identity=%q", removedRoom, removedIdentity)
+	}
+	mediaStatus = http.StatusOK
+	w = request(s.Handler(), "POST", "/v1/admin/users/"+member.ID+"/enabled", adminToken, `{"enabled":false}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("disable status %d: %s", w.Code, w.Body)
+	}
+	if removedRoom != "active-room" || removedIdentity != member.ID {
+		t.Fatalf("live media participant not removed: room=%q identity=%q", removedRoom, removedIdentity)
+	}
+	if w = request(s.Handler(), "GET", "/v1/me", memberToken, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("disabled account retained API access: %d", w.Code)
+	}
+}
+
 func TestLoginRateLimitCountsOnlyFailures(t *testing.T) {
 	s, _ := fixture(t)
 	h := s.Handler()
