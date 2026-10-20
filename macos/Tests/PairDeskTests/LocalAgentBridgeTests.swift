@@ -83,6 +83,56 @@ final class LocalAgentBridgeTests: XCTestCase {
         XCTAssertEqual((result["data"] as? String)?.count, payload.base64EncodedString().count)
     }
 
+    func testMCPHelperAdvertisesGrantedScreenshotAndReturnsImageContent() throws {
+        let root = URL(fileURLWithPath: "/tmp/pdb-mcp-image-\(UUID().uuidString)", isDirectory: true)
+        let socket = root.appendingPathComponent("agent.sock")
+        let image = Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])
+        let bridge = LocalAgentBridge(socketURL: socket, auditURL: root.appendingPathComponent("audit.jsonl"),
+                                      screenshotProvider: { .success(image) })
+        bridge.update(callID: "call-1", participants: [], transcript: [])
+        let token = try XCTUnwrap(bridge.authorize(capabilities: ["screenshot"]))
+        defer { bridge.revoke(); try? FileManager.default.removeItem(at: root) }
+
+        let helper = Bundle(for: LocalAgentBridgeTests.self).bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("pairdesk-agent-mcp")
+        guard FileManager.default.isExecutableFile(atPath: helper.path) else {
+            throw XCTSkip("SwiftPM MCP helper executable was not built beside the test bundle")
+        }
+        let process = Process()
+        process.executableURL = helper
+        process.environment = ProcessInfo.processInfo.environment.merging([
+            "PAIRDESK_BRIDGE_TOKEN": token,
+            "PAIRDESK_BRIDGE_SOCKET": socket.path
+        ]) { _, new in new }
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let requests = [
+            #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-image-client","version":"1"}}}"#,
+            #"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            #"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+            #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"pairdesk_call_screenshot","arguments":{}}}"#
+        ].joined(separator: "\n") + "\n"
+        input.fileHandleForWriting.write(Data(requests.utf8))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        let outputText = try XCTUnwrap(String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8))
+        let messages = try outputText.split(separator: "\n").map { line in
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+        let toolsResponse = try XCTUnwrap(messages.first { ($0["id"] as? Int) == 2 }?["result"] as? [String: Any])
+        let tools = try XCTUnwrap(toolsResponse["tools"] as? [[String: Any]])
+        XCTAssertEqual(tools.map { $0["name"] as? String }, ["pairdesk_call_screenshot"])
+        let callResponse = try XCTUnwrap(messages.first { ($0["id"] as? Int) == 3 }?["result"] as? [String: Any])
+        let content = try XCTUnwrap(callResponse["content"] as? [[String: Any]])
+        XCTAssertEqual(content.first?["type"] as? String, "image")
+        XCTAssertEqual(content.first?["mimeType"] as? String, "image/png")
+        XCTAssertEqual(content.first?["data"] as? String, image.base64EncodedString())
+    }
+
     private func runUnauthorizedMCPClient(socket: String) throws {
         let helper = Bundle(for: LocalAgentBridgeTests.self).bundleURL.deletingLastPathComponent()
             .appendingPathComponent("pairdesk-agent-mcp")
