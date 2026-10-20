@@ -156,8 +156,12 @@ func (s *Server) createCall(w http.ResponseWriter, r *http.Request, u User) {
 	invite := CallInvitation{ID: callID, CallerID: u.ID, TargetID: target.ID, RoomID: roomID, Status: callPending, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(callTTL)}
 	s.store.s.Rooms[roomID] = rm
 	s.store.s.Calls[callID] = invite
+	pushJobs := s.enqueuePushJobsLocked([]string{target.ID}, "direct_call", invite.ID, "", invite.ExpiresAt)
 	if err = s.store.save(); err != nil {
 		delete(s.store.s.Calls, callID)
+		for _, id := range pushJobs {
+			delete(s.store.s.PushJobs, id)
+		}
 		if q.RoomID == "" {
 			delete(s.store.s.Rooms, roomID)
 		}

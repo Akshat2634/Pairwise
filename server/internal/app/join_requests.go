@@ -131,16 +131,20 @@ func (s *Server) createJoinRequest(w http.ResponseWriter, r *http.Request, u Use
 	}
 	request := CallJoinRequest{ID: id, RequesterID: u.ID, RoomID: roomID, Status: "pending", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(joinRequestTTL)}
 	s.store.s.JoinRequests[id] = request
-	if err := s.store.save(); err != nil {
-		delete(s.store.s.JoinRequests, id)
-		fail(w, 500, "internal error")
-		return
-	}
 	participants := make([]string, 0, len(room.Members))
 	for userID := range room.Members {
 		if userID != u.ID && activeMemberInRoomLocked(s.store.s, userID, roomID, now) {
 			participants = append(participants, userID)
 		}
+	}
+	pushJobs := s.enqueuePushJobsLocked(participants, "join_request", roomID, request.ID, request.ExpiresAt)
+	if err := s.store.save(); err != nil {
+		delete(s.store.s.JoinRequests, id)
+		for _, jobID := range pushJobs {
+			delete(s.store.s.PushJobs, jobID)
+		}
+		fail(w, 500, "internal error")
+		return
 	}
 	s.notify(participants, "join_request", roomID, request.ExpiresAt)
 	writeJSON(w, http.StatusCreated, map[string]any{"request": s.joinRequestSnapshotLocked(request, s.store.s.Users[u.ID], room, now)})

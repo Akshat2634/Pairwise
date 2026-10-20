@@ -128,6 +128,96 @@ func TestInvalidPushTokenCleanupIsScopedAndDurable(t *testing.T) {
 	}
 }
 
+func TestPushOutboxSurvivesRestartAndDropsCompletedJob(t *testing.T) {
+	s, _ := fixture(t)
+	path := s.store.path
+	user, _ := addCallUser(t, s, "mobile outbox")
+	device := DeviceRegistration{UserID: user.ID, DeviceID: "phone", Platform: "android", PushToken: "fcm-token", UpdatedAt: time.Now().UTC()}
+	invite := CallInvitation{ID: "invite-outbox", CallerID: "caller", TargetID: user.ID, RoomID: "room-outbox", Status: callPending, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Minute).UTC()}
+	s.store.lock()
+	s.store.s.Devices[deviceKey(user.ID, device.DeviceID)] = device
+	s.store.s.Calls[invite.ID] = invite
+	s.push = &fakePushSender{sent: make(chan struct {
+		device  DeviceRegistration
+		event   string
+		callID  string
+		expires time.Time
+	}, 1)}
+	added := s.enqueuePushJobsLocked([]string{user.ID}, "direct_call", invite.ID, "", invite.ExpiresAt)
+	if len(added) != 1 {
+		s.store.unlock()
+		t.Fatalf("expected one durable job, got %d", len(added))
+	}
+	if err := s.store.save(); err != nil {
+		s.store.unlock()
+		t.Fatal(err)
+	}
+	s.store.unlock()
+
+	reopened, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(reopened)
+	restarted.push = s.push
+	restarted.deliverPushJobs(context.Background())
+	select {
+	case sent := <-s.push.(*fakePushSender).sent:
+		if sent.event != "direct_call" || sent.callID != invite.ID || sent.device.DeviceID != device.DeviceID {
+			t.Fatalf("replayed wrong push: %+v", sent)
+		}
+	default:
+		t.Fatal("pending push was not replayed after reopening the store")
+	}
+	reopened.lock()
+	remaining := len(reopened.s.PushJobs)
+	reopened.unlock()
+	if remaining != 0 {
+		t.Fatalf("successfully delivered job remains in outbox: %d", remaining)
+	}
+}
+
+func TestPushOutboxDeduplicatesJobsAndPersistsRetrySchedule(t *testing.T) {
+	s, _ := fixture(t)
+	path := s.store.path
+	user, _ := addCallUser(t, s, "mobile retry")
+	device := DeviceRegistration{UserID: user.ID, DeviceID: "phone", Platform: "android", PushToken: "fcm-token", UpdatedAt: time.Now().UTC()}
+	invite := CallInvitation{ID: "invite-retry", CallerID: "caller", TargetID: user.ID, RoomID: "room-retry", Status: callPending, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Minute).UTC()}
+	s.push = &fakePushSender{sent: make(chan struct {
+		device  DeviceRegistration
+		event   string
+		callID  string
+		expires time.Time
+	}, 1)}
+	s.store.lock()
+	s.store.s.Devices[deviceKey(user.ID, device.DeviceID)] = device
+	s.store.s.Calls[invite.ID] = invite
+	added := s.enqueuePushJobsLocked([]string{user.ID}, "direct_call", invite.ID, "", invite.ExpiresAt)
+	duplicates := s.enqueuePushJobsLocked([]string{user.ID}, "direct_call", invite.ID, "", invite.ExpiresAt)
+	if len(added) != 1 || len(duplicates) != 0 {
+		s.store.unlock()
+		t.Fatalf("outbox enqueue should be idempotent: first=%d duplicate=%d", len(added), len(duplicates))
+	}
+	job := s.store.s.PushJobs[added[0]]
+	if err := s.store.save(); err != nil {
+		s.store.unlock()
+		t.Fatal(err)
+	}
+	s.store.unlock()
+
+	s.retryPushJob(job)
+	reopened, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.lock()
+	got := reopened.s.PushJobs[job.ID]
+	reopened.unlock()
+	if got.Attempts != 1 || !got.NextAttemptAt.After(time.Now()) {
+		t.Fatalf("retry schedule was not persisted: %+v", got)
+	}
+}
+
 func TestDirectCallPushDispatchContainsOnlyCallIDAndIsDisabledByDefault(t *testing.T) {
 	s, _ := fixture(t)
 	h := s.Handler()
@@ -185,6 +275,7 @@ func TestDirectCallPushDispatchContainsOnlyCallIDAndIsDisabledByDefault(t *testi
 	if w.Code != http.StatusCreated {
 		t.Fatalf("call with push configured: %d %s", w.Code, w.Body)
 	}
+	s.deliverPushJobs(context.Background())
 	var response struct {
 		Call struct {
 			ID string `json:"id"`
@@ -223,6 +314,7 @@ func TestJoinRequestPushTargetsActiveCallMembers(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("join request: %d %s", w.Code, w.Body)
 	}
+	s.deliverPushJobs(context.Background())
 	select {
 	case got := <-s.push.(*fakePushSender).sent:
 		if got.device.UserID != member.ID || got.event != "join_request" || got.callID != roomID || got.device.UserID == requester.ID {
