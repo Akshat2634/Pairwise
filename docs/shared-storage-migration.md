@@ -19,10 +19,18 @@ using this design for a substantially larger deployment.
 
 1. Take and verify an encrypted copy of `/data/pairdesk.json`; schedule a short
    maintenance window and stop the API and push worker.
-2. Configure a private Cloud SQL PostgreSQL instance with automated backups
-   and point-in-time recovery, TLS/private connectivity, and least-privilege
-   credentials. Put the DSN in the deployment secret store, not a committed
-   `.env` file or shell history.
+2. Use the dedicated `pairdesk-pg` PostgreSQL 16 instance in `us-central1`.
+   It has automated daily backups (7 retained), 7-day point-in-time recovery,
+   SSL required, and no authorized public client networks. The `pairdesk`
+   database and least-privilege `pairdesk_app` role are provisioned. Its
+   password is held in Secret Manager as `pairdesk-db-password`; never copy it
+   into this repository or a committed `.env` file. The instance is currently
+   reached through the Cloud SQL Auth Proxy. Production API connectivity still
+   needs a workload identity and a deployment secret/configuration path before
+cutover. A dedicated runtime service account is prepared as
+`pairdesk-api-runtime@named-tube-444103-p0.iam.gserviceaccount.com`; it has the
+Cloud SQL Client role and Secret Accessor on this database password secret.
+It is not yet attached to the production VM.
 3. Run `PAIRDESK_DATABASE_URL=... pairdesk-admin import-json --from
    /data/pairdesk.json`. Import replaces the singleton state atomically and
    preserves accounts, password hashes, sessions, device registrations, audit
@@ -49,9 +57,27 @@ export point. Keep the Cloud SQL instance and backups until owners confirm
 sign-in and pending-call behavior; do not delete the database as part of
 rollback.
 
-## Recovery evidence still required
+## Recovery and cutover status
 
-This repository change does not provision or alter Cloud SQL. Before closing
-the shared-storage issue, operations still need to configure GCP backups/PITR,
-perform a restore into an isolated instance, and verify an existing teammate
-can sign in after that restore. Alert delivery also needs a real test receipt.
+The production instance has been provisioned and its backup/PITR settings
+verified. A manual backup was restored to an isolated temporary clone; a
+sentinel row was read back successfully through the application database role,
+then the probe and clone were removed. The primary instance has deletion
+protection enabled. This proves the Cloud SQL backup/restore path, not recovery
+of Pairwise production accounts: the live API has not been migrated and
+existing-user sign-in after a production data import has not yet been tested.
+
+Before cutover, attach the prepared service account to the API VM (currently it
+has no attached service account) and configure the Cloud SQL Auth Proxy as a
+managed service or sidecar. Attaching an identity requires a VM stop/start and
+must be scheduled with the application maintenance window. Then follow the
+migration steps, verify
+health/readiness, existing-user login, presence, calls, and push outbox
+delivery, and retain the JSON export for rollback. Do not scale API replicas
+until the PostgreSQL-backed API and push worker pass the two-instance
+concurrency check. The current VM still runs JSON-volume mode.
+
+Cloud Monitoring has one enabled Pairwise readiness alert policy. A temporary
+test policy targeting the configured email channel opened an incident and was
+removed after the incident closed. The test incident confirms the alert path
+was exercised; mailbox receipt was not independently confirmed.
