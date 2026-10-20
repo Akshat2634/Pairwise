@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -162,4 +163,17 @@ func (st *Store) ListAdminAudit() []AdminAuditEvent {
 	st.lock()
 	defer st.unlock()
 	return append([]AdminAuditEvent(nil), st.s.AdminAudit...)
+}
+
+func (st *Store) RoomsForUser(userID string) []string {
+	st.lock()
+	defer st.unlock()
+	rooms := make([]string, 0)
+	for roomID, room := range st.s.Rooms {
+		if _, exists := room.Members[userID]; exists {
+			rooms = append(rooms, roomID)
+		}
+	}
+	sort.Strings(rooms)
+	return rooms
 }

@@ -332,6 +332,14 @@ func (s *Server) adminUserAction(w http.ResponseWriter, r *http.Request, admin U
 			fail(w, 400, err.Error())
 			return
 		}
+		if !q.Enabled {
+			for _, roomID := range s.store.RoomsForUser(parts[0]) {
+				if err := s.removeLivekitParticipant(roomID, parts[0]); err != nil && !errors.Is(err, errLivekitParticipantMissing) {
+					fail(w, 503, "account disabled, but media access revocation is incomplete; retry the disable action")
+					return
+				}
+			}
+		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	case "password":
 		if r.Method != http.MethodPost {
