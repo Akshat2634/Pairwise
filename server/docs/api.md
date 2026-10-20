@@ -19,6 +19,7 @@ All endpoints use JSON. Protected routes require `Authorization: Bearer <token>`
 - `GET /v1/admin/users` (admins only) → all accounts and enabled state; never returns password hashes.
 - `POST /v1/admin/users/{id}/password` (admins only) `{ "newPassword":"..." }` → resets the password and revokes all sessions for that account.
 - `POST /v1/admin/users/{id}/enabled` (admins only) `{ "enabled":true|false }` → enables/disables an account; disabling invalidates sessions and cannot disable the last enabled admin.
+- `GET /v1/admin/audit` (admins only) → the most recent 500 account password-reset and enable/disable actions, with actor/target IDs and timestamps only. Passwords, email addresses, tokens, and request bodies are never recorded.
 - `GET /healthz` is a liveness check. `GET /readyz` checks the configured LiveKit media service and returns HTTP 503 when that dependency is unavailable; responses contain no credentials.
 - `GET /v1/users` → `{ "users":[{"id":"...","name":"...","email":"...","online":true}] }`
 - `POST /v1/heartbeat` `{}` → `{ "ok":true }`; marks the signed-in user online for 30 seconds.

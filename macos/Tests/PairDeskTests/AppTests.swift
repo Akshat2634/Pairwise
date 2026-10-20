@@ -76,6 +76,13 @@ final class AppTests: XCTestCase {
         let join = try JSONDecoder().decode(JoinResponse.self, from: data)
         XCTAssertEqual(join.participantIdentity, join.room.participants.first?.id)
     }
+    func testAdminAuditWireContractDecodesRFC3339Timestamp() throws {
+        let data = Data(#"{"events":[{"actorId":"admin-1","targetId":"member-2","action":"account.password_reset","occurredAt":"2026-10-20T03:00:00Z"}]}"#.utf8)
+        let response = try JSONDecoder().decode(AdminAuditResponse.self, from: data)
+        XCTAssertEqual(response.events.count, 1)
+        XCTAssertEqual(response.events[0].action, "account.password_reset")
+        XCTAssertEqual(response.events[0].date, ISO8601DateFormatter().date(from: "2026-10-20T03:00:00Z"))
+    }
     func testHostAccessibilityBlockIsReportedOverControlChannel() throws {
         let message = RemoteControlMessage(epoch: "", sequence: 1, kind: .hostPermissionRequired)
         let decoded = try JSONDecoder().decode(RemoteControlMessage.self, from: JSONEncoder().encode(message))

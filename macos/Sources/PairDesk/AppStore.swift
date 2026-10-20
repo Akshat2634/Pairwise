@@ -9,6 +9,8 @@ final class AppStore: ObservableObject {
     @Published var user: TeamUser? { didSet { updateCallAudio() } }
     @Published var users: [TeamUser] = []
     @Published var adminUsers: [TeamUser] = []
+    @Published var adminAuditEvents: [AdminAuditEvent] = []
+    @Published var adminAuditSupported = true
     @Published var rooms: [PairRoom] = []
     @Published var callInvitations: [CallInvitation] = [] { didSet { updateCallAudio() } }
     @Published var joinRequests: [CallJoinRequest] = []
@@ -578,6 +580,14 @@ final class AppStore: ObservableObject {
     func refreshAdminUsers() async throws {
         let response: UsersResponse = try await api.request("v1/admin/users")
         adminUsers = response.users
+        do {
+            let audit: AdminAuditResponse = try await api.request("v1/admin/audit")
+            adminAuditEvents = audit.events
+            adminAuditSupported = true
+        } catch let error as APIError where error.status == 404 {
+            adminAuditEvents = []
+            adminAuditSupported = false
+        }
     }
 
     func setTeamMemberEnabled(_ member: TeamUser, enabled: Bool) async throws {

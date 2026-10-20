@@ -545,6 +545,26 @@ private struct ManageTeamView: View {
                     }
                 }
             }.frame(minHeight: 180, maxHeight: 320)
+            Divider()
+            Text("Recent admin activity").font(.headline)
+            if !store.adminAuditSupported {
+                Text("Activity history will appear after the server is updated.").font(.caption).foregroundStyle(.secondary)
+            } else if store.adminAuditEvents.isEmpty {
+                Text("No account changes recorded yet.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(store.adminAuditEvents.suffix(10).reversed()) { event in
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(auditDescription(event)).font(.caption)
+                                Spacer(minLength: 8)
+                                Text(event.date.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }.frame(maxHeight: 110)
+            }
             if let resetMember {
                 Divider()
                 Text("Reset password for \(resetMember.name)").font(.headline)
@@ -567,6 +587,19 @@ private struct ManageTeamView: View {
         }.padding(24).frame(width: 620).task {
             do { try await store.refreshAdminUsers() } catch { self.error = error.localizedDescription }
         }
+    }
+
+    private func auditDescription(_ event: AdminAuditEvent) -> String {
+        let verb: String
+        switch event.action {
+        case "account.password_reset": verb = "reset password for"
+        case "account.disabled": verb = "disabled"
+        case "account.enabled": verb = "enabled"
+        default: verb = "updated"
+        }
+        let actor = store.adminUsers.first(where: { $0.id == event.actorId })?.name ?? "An administrator"
+        let target = store.adminUsers.first(where: { $0.id == event.targetId })?.name ?? "a team member"
+        return "\(actor) \(verb) \(target)"
     }
 }
 

@@ -217,8 +217,22 @@ func TestAdminCanListResetAndDisableUsersWithoutExposingCredentialData(t *testin
 	if w.Code != 200 || strings.Contains(w.Body.String(), "passwordHash") || strings.Contains(w.Body.String(), "correct-horse-battery") {
 		t.Fatalf("admin list leaked credentials or failed: %d %s", w.Code, w.Body)
 	}
+	if w = request(h, "GET", "/v1/admin/audit", memberToken, ""); w.Code != 403 {
+		t.Fatalf("non-admin audit status %d", w.Code)
+	}
 	if w = request(h, "POST", "/v1/admin/users/"+member.ID+"/password", adminToken, `{"newPassword":"new-member-password"}`); w.Code != 200 {
 		t.Fatalf("admin reset password: %d %s", w.Code, w.Body)
+	}
+	w = request(h, "GET", "/v1/admin/audit", adminToken, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"action":"account.password_reset"`) ||
+		!strings.Contains(w.Body.String(), `"actorId":"`+admin.ID+`"`) ||
+		!strings.Contains(w.Body.String(), `"targetId":"`+member.ID+`"`) ||
+		strings.Contains(w.Body.String(), "new-member-password") || strings.Contains(w.Body.String(), "passwordHash") {
+		t.Fatalf("admin audit missing safe password-reset event: %d %s", w.Code, w.Body)
+	}
+	reopened, err := OpenStore(s.store.path)
+	if err != nil || len(reopened.ListAdminAudit()) != 1 || reopened.ListAdminAudit()[0].Action != "account.password_reset" {
+		t.Fatalf("admin audit did not persist safely: %v %+v", err, reopened.ListAdminAudit())
 	}
 	if w = request(h, "GET", "/v1/me", memberToken, ""); w.Code != 401 {
 		t.Fatalf("reset should revoke prior member sessions: %d", w.Code)
