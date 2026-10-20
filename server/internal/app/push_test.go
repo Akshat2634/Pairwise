@@ -72,6 +72,62 @@ func TestDeviceRegistrationRequiresAuthValidPlatformAndHidesTokens(t *testing.T)
 	}
 }
 
+func TestInvalidPushTokenCleanupIsScopedAndDurable(t *testing.T) {
+	s, _ := fixture(t)
+	path := s.store.path
+	ios := DeviceRegistration{UserID: "user-ios", DeviceID: "phone", Platform: "ios", PushToken: "alert-old", VoIPToken: "voip-old", UpdatedAt: time.Now()}
+	android := DeviceRegistration{UserID: "user-android", DeviceID: "phone", Platform: "android", PushToken: "fcm-old", UpdatedAt: time.Now()}
+	s.store.lock()
+	s.store.s.Devices[deviceKey(ios.UserID, ios.DeviceID)] = ios
+	s.store.s.Devices[deviceKey(android.UserID, android.DeviceID)] = android
+	if err := s.store.save(); err != nil {
+		s.store.unlock()
+		t.Fatal(err)
+	}
+	s.store.unlock()
+
+	s.deactivateInvalidPushToken(ios, "direct_call")
+	// A stale provider response must not erase a token refreshed since the send.
+	stale := android
+	stale.PushToken = "fcm-stale"
+	s.store.lock()
+	s.store.s.Devices[deviceKey(android.UserID, android.DeviceID)] = DeviceRegistration{UserID: android.UserID, DeviceID: android.DeviceID, Platform: android.Platform, PushToken: "fcm-new", UpdatedAt: time.Now()}
+	if err := s.store.save(); err != nil {
+		s.store.unlock()
+		t.Fatal(err)
+	}
+	s.store.unlock()
+	s.deactivateInvalidPushToken(stale, "direct_call")
+	refreshedAndroid := DeviceRegistration{UserID: android.UserID, DeviceID: android.DeviceID, Platform: android.Platform, PushToken: "fcm-new"}
+
+	reopened, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.lock()
+	gotIOS := reopened.s.Devices[deviceKey(ios.UserID, ios.DeviceID)]
+	gotAndroid := reopened.s.Devices[deviceKey(android.UserID, android.DeviceID)]
+	reopened.unlock()
+	if gotIOS.PushToken != ios.PushToken || gotIOS.VoIPToken != "" {
+		t.Fatalf("iOS cleanup should clear only the invalid VoIP token: %+v", gotIOS)
+	}
+	if gotAndroid.PushToken != "fcm-new" {
+		t.Fatalf("stale failure cleared refreshed Android token: %+v", gotAndroid)
+	}
+
+	s.deactivateInvalidPushToken(refreshedAndroid, "join_request")
+	reopened, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.lock()
+	_, exists := reopened.s.Devices[deviceKey(android.UserID, android.DeviceID)]
+	reopened.unlock()
+	if exists {
+		t.Fatal("registration with no remaining valid token was not removed")
+	}
+}
+
 func TestDirectCallPushDispatchContainsOnlyCallIDAndIsDisabledByDefault(t *testing.T) {
 	s, _ := fixture(t)
 	h := s.Handler()
