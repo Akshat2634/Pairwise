@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -125,7 +126,9 @@ func (s *Server) enqueuePushJobsLocked(userIDs []string, event, callID, requestI
 			if notificationID == "" {
 				notificationID = callID
 			}
-			id := strings.Join([]string{event, notificationID, userID, device.DeviceID}, ":")
+			key := strings.Join([]string{event, notificationID, userID, device.DeviceID}, "\x00")
+			digest := sha256.Sum256([]byte(key))
+			id := hex.EncodeToString(digest[:])
 			if _, exists := s.store.s.PushJobs[id]; exists {
 				continue
 			}
