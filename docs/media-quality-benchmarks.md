@@ -1,6 +1,6 @@
 # Media quality benchmark status
 
-Pairwise currently exposes viewer-side WebRTC resolution, frame rate, received packet loss, selected-path RTT, and time from attaching a screen track to its first rendered frame. The support diagnostics export includes those values without screen/audio content or account identity. The first-frame number is a per-attachment observation, not a release-quality score.
+Pairwise currently exposes viewer-side WebRTC resolution, frame rate, received packet loss, selected-path RTT, time from attaching a screen track to its first rendered frame, and sustained zero-FPS interruptions with recovery duration. An interruption is counted only after at least two seconds of valid zero-FPS samples; missing samples break the measurement interval. The support diagnostics export includes these values without screen/audio content or account identity. These are per-call observations, not a release-quality score.
 
 ## Current CI coverage
 
@@ -29,7 +29,7 @@ Run at the default 1440p30 preset and the 4K30 maximum. Repeat once with a const
 ## Still needed for issue #35
 
 - A reproducible network conditioner in CI and machine-readable per-commit results.
-- Automated screen-share time-to-first-frame, interruption/recovery, and pointer response measurements.
+- Automated screen-share time-to-first-frame and pointer response measurements. Interruption/recovery is now measured in-app but still needs automated induced-outage coverage.
 - CPU and readability baselines on supported hardware, plus validated regression thresholds.
 - A 3–4 participant real-device reference run and confirmation that exported diagnostics remain content-free.
 

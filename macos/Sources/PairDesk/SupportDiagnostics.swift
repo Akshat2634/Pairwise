@@ -27,6 +27,7 @@ enum SupportDiagnostics {
         Screen RTT: \(rtc.screenNetworkQuality.label)
         Received screen stream: \(rtc.screenStreamMetrics.summary)
         Screen time to first rendered frame: \(rtc.screenTimeToFirstFrameMilliseconds.map { "\($0) ms" } ?? "unavailable")
+        Screen interruptions: \(rtc.screenShareContinuityMetrics.summary)
         Selected ICE route: \(route)
         Current error category: \(errorCategory)
 
