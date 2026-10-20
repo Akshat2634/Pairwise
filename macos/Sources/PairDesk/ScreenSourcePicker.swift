@@ -162,6 +162,28 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
         return (filter, sourceRect, excluded)
     }
 
+    /// Captures one user-selected window for the local agent. The image remains
+    /// in memory and is returned only to the already-authorized local request.
+    func captureAgentScreenshot() async throws -> Data {
+        let filter = try await chooseDisplay(.window)
+        guard filter.style == .window else { throw CocoaError(.userCancelled) }
+        let maxDimension: CGFloat = 1_920
+        let width = max(1, filter.contentRect.width)
+        let height = max(1, filter.contentRect.height)
+        let scale = min(1, maxDimension / max(width, height))
+        let configuration = SCStreamConfiguration()
+        configuration.width = max(1, Int(width * scale))
+        configuration.height = max(1, Int(height * scale))
+        configuration.showsCursor = false
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+        guard let png, !png.isEmpty, png.count <= 2_000_000 else {
+            throw NSError(domain: "PairDesk.AgentScreenshot", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "The selected window screenshot is too large to share safely."])
+        }
+        return png
+    }
+
     /// Offer app exclusions only after the person explicitly picked a display.
     /// Rebuilding the filter retains that exact display and can only narrow it.
     private func choosePrivacyVeilApplications(for filter: SCContentFilter, source: ScreenShareSource) async throws -> [SCRunningApplication] {
@@ -217,7 +239,11 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
     }
 
     private func chooseDisplay(_ source: ScreenShareSource) async throws -> SCContentFilter {
-        try await withCheckedThrowingContinuation { continuation in
+        guard continuation == nil else {
+            throw NSError(domain: "PairDesk.ScreenPicker", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Another screen selection is already in progress."])
+        }
+        return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             let picker = SCContentSharingPicker.shared
             var configuration = picker.defaultConfiguration

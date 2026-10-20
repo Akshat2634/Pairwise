@@ -3,6 +3,39 @@ import Foundation
 import Darwin
 import Security
 
+extension Notification.Name {
+    static let pairDeskAgentScreenshotRequested = Notification.Name("PairDesk.AgentScreenshotRequested")
+}
+
+final class AgentScreenshotRequest: @unchecked Sendable {
+    private let lock = NSLock()
+    private let completed = DispatchSemaphore(value: 0)
+    private var result: Result<Data, AgentScreenshotFailure>?
+    private var didComplete = false
+
+    func resolve(data: Data) { finish(.success(data)) }
+    func resolve(error: String) { finish(.failure(AgentScreenshotFailure(message: error))) }
+
+    func wait(timeout: DispatchTimeInterval) -> Result<Data, AgentScreenshotFailure>? {
+        guard completed.wait(timeout: .now() + timeout) == .success else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        return result
+    }
+
+    private func finish(_ result: Result<Data, AgentScreenshotFailure>) {
+        lock.lock()
+        guard !didComplete else { lock.unlock(); return }
+        didComplete = true
+        self.result = result
+        lock.unlock()
+        completed.signal()
+    }
+}
+
+struct AgentScreenshotFailure: Error {
+    let message: String
+}
+
 /// Call-scoped, local-only bridge for explicitly granted coding-agent context.
 /// The socket is created only after the person grants at least one capability.
 @MainActor
@@ -11,17 +44,26 @@ final class LocalAgentBridge: ObservableObject {
     @Published private(set) var grantedCapabilities: Set<String> = []
     @Published private(set) var socketPath = ""
     @Published private(set) var credential: String?
+    @Published private(set) var screenshotActivity: String?
 
     private let state: AgentBridgeState
     private let endpoint: URL
     private var listener: Int32 = -1
     private var listenerQueue: DispatchQueue?
     private var callID: String?
+    private var screenshotObserver: NSObjectProtocol?
 
-    init(socketURL: URL? = nil, auditURL: URL? = nil) {
+    init(socketURL: URL? = nil, auditURL: URL? = nil,
+         screenshotProvider: (() -> Result<Data, AgentScreenshotFailure>?)? = nil) {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         endpoint = socketURL ?? root.appendingPathComponent("PairDesk/agent.sock")
-        state = AgentBridgeState(auditURL: auditURL ?? LocalAgentBridgeAudit.url)
+        state = AgentBridgeState(auditURL: auditURL ?? LocalAgentBridgeAudit.url, screenshotProvider: screenshotProvider)
+        screenshotObserver = NotificationCenter.default.addObserver(
+            forName: .pairDeskAgentScreenshotRequested, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let request = notification.object as? AgentScreenshotRequest else { return }
+            Task { @MainActor [weak self] in await self?.captureScreenshot(for: request) }
+        }
     }
 
     func update(callID: String?, participants: [[String: String]], transcript: [[String: String]]) {
@@ -35,7 +77,7 @@ final class LocalAgentBridge: ObservableObject {
     @discardableResult
     func authorize(capabilities: Set<String>) -> String? {
         guard callID != nil, !capabilities.isEmpty,
-              capabilities.isSubset(of: ["participants", "transcript"]) else { return nil }
+              capabilities.isSubset(of: ["participants", "transcript", "screenshot"]) else { return nil }
         revoke(reason: "replaced")
         guard let token = Self.randomCredential() else { return nil }
         let path = endpoint.path
@@ -62,6 +104,30 @@ final class LocalAgentBridge: ObservableObject {
         grantedCapabilities = []
         isEnabled = false
         socketPath = ""
+        screenshotActivity = nil
+    }
+
+    private func captureScreenshot(for request: AgentScreenshotRequest) async {
+        guard isEnabled, grantedCapabilities.contains("screenshot") else {
+            request.resolve(error: "screenshot access is no longer enabled")
+            return
+        }
+        screenshotActivity = "Choose one window in the macOS picker to share a screenshot with your local agent."
+        do {
+            let png = try await SystemScreenPicker.shared.captureAgentScreenshot()
+            guard isEnabled, grantedCapabilities.contains("screenshot") else {
+                request.resolve(error: "screenshot access was revoked before delivery")
+                screenshotActivity = nil
+                return
+            }
+            screenshotActivity = "One screenshot was shared with the local agent."
+            request.resolve(data: png)
+        } catch {
+            screenshotActivity = (error as? CocoaError)?.code == .userCancelled
+                ? "Screenshot cancelled; nothing was shared."
+                : "Screenshot was not shared."
+            request.resolve(error: "screenshot was cancelled or unavailable")
+        }
     }
 
     private func startListener(path: String) -> Bool {
@@ -103,16 +169,43 @@ final class LocalAgentBridge: ObservableObject {
             defer { close(client) }
             var noSignal: Int32 = 1
             _ = setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
-            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
             var timeout = timeval(tv_sec: 3, tv_usec: 0)
             _ = setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-            let count = read(client, &buffer, buffer.count - 1)
-            guard count > 0, let request = try? JSONDecoder().decode(AgentBridgeRequest.self,
-                from: Data(buffer.prefix(count))) else { continue }
+            guard let data = readLine(client, limit: 4 * 1024 * 1024),
+                  let request = try? JSONDecoder().decode(AgentBridgeRequest.self, from: data) else { continue }
             let response = state.handle(request)
             guard let data = try? JSONEncoder().encode(response) else { continue }
-            _ = data.withUnsafeBytes { write(client, $0.baseAddress, data.count) }
-            _ = write(client, "\n", 1)
+            guard data.count <= 4 * 1024 * 1024 else { continue }
+            writeAll(client, data + Data([0x0a]))
+        }
+    }
+
+    nonisolated private static func readLine(_ fd: Int32, limit: Int) -> Data? {
+        var data = Data()
+        var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+        while data.count < limit {
+            let count = read(fd, &chunk, chunk.count)
+            if count == 0 { break }
+            guard count > 0 else { return nil }
+            if data.count + count > limit, chunk[..<count].firstIndex(of: 0x0a) == nil { return nil }
+            if let newline = chunk[..<count].firstIndex(of: 0x0a) {
+                data.append(contentsOf: chunk[..<newline])
+                return data
+            }
+            data.append(contentsOf: chunk[..<count])
+        }
+        return data.isEmpty ? nil : data
+    }
+
+    nonisolated private static func writeAll(_ fd: Int32, _ data: Data) {
+        data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var offset = 0
+            while offset < data.count {
+                let count = write(fd, base.advanced(by: offset), data.count - offset)
+                if count <= 0 { return }
+                offset += count
+            }
         }
     }
 
@@ -164,8 +257,12 @@ final class AgentBridgeState: @unchecked Sendable {
     private var participants = [[String: String]]()
     private var transcript = [[String: String]]()
     private let auditURL: URL
+    private let screenshotProvider: (() -> Result<Data, AgentScreenshotFailure>?)?
 
-    init(auditURL: URL) { self.auditURL = auditURL }
+    init(auditURL: URL, screenshotProvider: (() -> Result<Data, AgentScreenshotFailure>?)? = nil) {
+        self.auditURL = auditURL
+        self.screenshotProvider = screenshotProvider
+    }
 
     func update(callID: String?, participants: [[String: String]], transcript: [[String: String]]) {
         lock.lock(); defer { lock.unlock() }
@@ -188,11 +285,22 @@ final class AgentBridgeState: @unchecked Sendable {
         LocalAgentBridgeAudit.write(action: action, capability: capability, to: auditURL)
     }
     func handle(_ request: AgentBridgeRequest) -> AgentBridgeResponse {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         guard let token, Self.constantTimeEqual(token, request.token), activeCallID != nil else {
             LocalAgentBridgeAudit.write(action: "denied", capability: "unauthorized", to: auditURL)
+            lock.unlock()
             return AgentBridgeResponse(error: "unauthorized or call ended")
         }
+        if request.method == "screenshot" {
+            guard capabilities.contains("screenshot") else {
+                LocalAgentBridgeAudit.write(action: "denied", capability: "screenshot", to: auditURL)
+                lock.unlock()
+                return AgentBridgeResponse(error: "screenshot capability not granted")
+            }
+            lock.unlock()
+            return captureScreenshot(token: request.token)
+        }
+        defer { lock.unlock() }
         switch request.method {
         case "capabilities":
             LocalAgentBridgeAudit.write(action: "read", capability: "capabilities", to: auditURL)
@@ -216,6 +324,45 @@ final class AgentBridgeState: @unchecked Sendable {
             return AgentBridgeResponse(error: "unknown method")
         }
     }
+
+    private func captureScreenshot(token requestedToken: String) -> AgentBridgeResponse {
+        let result: Result<Data, AgentScreenshotFailure>?
+        if let screenshotProvider {
+            result = screenshotProvider()
+        } else {
+            let request = AgentScreenshotRequest()
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .pairDeskAgentScreenshotRequested, object: request)
+            }
+            result = request.wait(timeout: .seconds(90))
+        }
+        guard let result else {
+            audit("denied", capability: "screenshot-timeout")
+            return AgentBridgeResponse(error: "screenshot request timed out or was not approved")
+        }
+        switch result {
+        case let .failure(error):
+            audit("denied", capability: "screenshot-cancelled")
+            return AgentBridgeResponse(error: error.message)
+        case let .success(png):
+            guard finishScreenshotIfAuthorized(token: requestedToken) else {
+                return AgentBridgeResponse(error: "screenshot access expired before delivery")
+            }
+            return AgentBridgeResponse(result: ["mimeType": "image/png", "data": png.base64EncodedString()])
+        }
+    }
+
+    private func finishScreenshotIfAuthorized(token requestedToken: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let token, Self.constantTimeEqual(token, requestedToken), activeCallID != nil,
+              capabilities.contains("screenshot") else {
+            LocalAgentBridgeAudit.write(action: "denied", capability: "screenshot-revoked", to: auditURL)
+            return false
+        }
+        LocalAgentBridgeAudit.write(action: "read", capability: "screenshot", to: auditURL)
+        return true
+    }
+
     private static func constantTimeEqual(_ lhs: String, _ rhs: String) -> Bool {
         let a = Array(lhs.utf8), b = Array(rhs.utf8)
         guard a.count == b.count else { return false }

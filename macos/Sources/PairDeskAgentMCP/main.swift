@@ -42,6 +42,10 @@ while let line = readLine() {
             tools.append(["name": "pairdesk_call_transcript", "description": "Read the local transcript for the active PairDesk call.",
                 "inputSchema": ["type": "object", "properties": [:], "additionalProperties": false]])
         }
+        if capabilities.contains("screenshot") {
+            tools.append(["name": "pairdesk_call_screenshot", "description": "Request one screenshot of a window the person selects in the native macOS picker. The person must approve each request.",
+                "inputSchema": ["type": "object", "properties": [:], "additionalProperties": false]])
+        }
         response = ["jsonrpc": "2.0", "id": id, "result": ["resultType": "complete", "tools": tools]]
     case "tools/call":
         guard supportsRequestMetadata(request, legacy: initializedLegacy) else {
@@ -50,9 +54,11 @@ while let line = readLine() {
         let params = request["params"] as? [String: Any] ?? [:]
         let name = params["name"] as? String ?? ""
         let bridgeMethod: String
+        let returnsImage: Bool
         switch name {
-        case "pairdesk_call_participants": bridgeMethod = "participants"
-        case "pairdesk_call_transcript": bridgeMethod = "transcript"
+        case "pairdesk_call_participants": bridgeMethod = "participants"; returnsImage = false
+        case "pairdesk_call_transcript": bridgeMethod = "transcript"; returnsImage = false
+        case "pairdesk_call_screenshot": bridgeMethod = "screenshot"; returnsImage = true
         default:
             response = ["jsonrpc": "2.0", "id": id,
                         "error": ["code": -32602, "message": "Unknown PairDesk tool"]]
@@ -60,6 +66,16 @@ while let line = readLine() {
         }
         do {
             let result = try callBridge(method: bridgeMethod)
+            if returnsImage {
+                guard result["mimeType"] as? String == "image/png",
+                      let encoded = result["data"] as? String,
+                      let image = Data(base64Encoded: encoded), !image.isEmpty, image.count <= 2_000_000 else {
+                    throw BridgeError.message("PairDesk returned an invalid screenshot.")
+                }
+                response = ["jsonrpc": "2.0", "id": id,
+                            "result": ["resultType": "complete", "content": [["type": "image", "data": encoded, "mimeType": "image/png"]], "isError": false]]
+                send(response, to: output); continue
+            }
             let text = String(data: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), encoding: .utf8) ?? "{}"
             response = ["jsonrpc": "2.0", "id": id,
                         "result": ["resultType": "complete", "content": [["type": "text", "text": text]], "isError": false]]
@@ -102,6 +118,8 @@ func callBridge(method: String) throws -> [String: Any] {
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     guard fd >= 0 else { throw BridgeError.message("Could not open PairDesk's local socket.") }
     defer { close(fd) }
+    var timeout = timeval(tv_sec: method == "screenshot" ? 100 : 5, tv_usec: 0)
+    _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     var noSignal: Int32 = 1
     _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
     var address = sockaddr_un()
@@ -119,15 +137,31 @@ func callBridge(method: String) throws -> [String: Any] {
     let data = try JSONSerialization.data(withJSONObject: object) + Data([0x0a])
     let wrote = data.withUnsafeBytes { write(fd, $0.baseAddress, data.count) }
     guard wrote == data.count else { throw BridgeError.message("Could not send the local PairDesk request.") }
-    var buffer = [UInt8](repeating: 0, count: 128 * 1024)
-    let count = read(fd, &buffer, buffer.count)
-    guard count > 0, let result = try JSONSerialization.jsonObject(with: Data(buffer.prefix(count))) as? [String: Any] else {
+    guard let response = readLine(fd, limit: 4 * 1024 * 1024),
+          let result = try JSONSerialization.jsonObject(with: response) as? [String: Any] else {
         throw BridgeError.message("PairDesk returned an invalid local response.")
     }
     guard result["ok"] as? Bool == true else {
         throw BridgeError.message(result["error"] as? String ?? "PairDesk denied this capability.")
     }
     return result["result"] as? [String: Any] ?? [:]
+}
+
+func readLine(_ fd: Int32, limit: Int) -> Data? {
+    var data = Data()
+    var chunk = [UInt8](repeating: 0, count: 64 * 1024)
+    while data.count < limit {
+        let count = read(fd, &chunk, chunk.count)
+        if count == 0 { break }
+        guard count > 0 else { return nil }
+        if data.count + count > limit, chunk[..<count].firstIndex(of: 0x0a) == nil { return nil }
+        if let newline = chunk[..<count].firstIndex(of: 0x0a) {
+            data.append(contentsOf: chunk[..<newline])
+            return data
+        }
+        data.append(contentsOf: chunk[..<count])
+    }
+    return data.isEmpty ? nil : data
 }
 
 enum BridgeError: LocalizedError {
