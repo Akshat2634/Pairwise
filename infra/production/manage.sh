@@ -5,7 +5,19 @@ cd "$ROOT"
 [[ -f generated/.env ]] || { echo 'Run configure.py first' >&2; exit 1; }
 # configure.py restricts these generated values to shell-safe domain/key/email characters.
 source generated/.env
-compose() { docker compose -p pairdesk-prod --env-file generated/.env -f docker-compose.yml "$@"; }
+COMPOSE_FILES=(-f docker-compose.yml)
+if [[ -n "${PAIRDESK_CLOUD_SQL_CONNECTION_NAME:-}" ]]; then
+  [[ -n "${PAIRDESK_DATABASE_URL:-}" ]] || { echo 'Cloud SQL connection is configured without a database URL' >&2; exit 1; }
+  [[ "$PAIRDESK_DATABASE_URL" == *'@cloud-sql-proxy:5432/pairdesk?sslmode=disable' ]] || {
+    echo 'Cloud SQL proxy is configured, but the database URL does not target its private Compose service' >&2
+    exit 1
+  }
+  COMPOSE_FILES+=(-f docker-compose.cloudsql.yml)
+elif [[ "${PAIRDESK_DATABASE_URL:-}" == *'@cloud-sql-proxy:5432/'* ]]; then
+  echo 'The database URL targets Cloud SQL but its instance connection name is missing; run configure-cloudsql.py' >&2
+  exit 1
+fi
+compose() { docker compose -p pairdesk-prod --env-file generated/.env "${COMPOSE_FILES[@]}" "$@"; }
 case "${1:-}" in
   certificates)
     [[ "$(uname -s)" == Linux ]] || { echo 'Certificate bootstrap runs on the Linux deployment host' >&2; exit 1; }
@@ -44,9 +56,15 @@ case "${1:-}" in
     [[ $# == 2 ]] || { echo 'Usage: manage.sh backup EXISTING_PRIVATE_DIRECTORY' >&2; exit 1; }
     [[ -d "$2" ]] || { echo 'Backup directory must already exist' >&2; exit 1; }
     umask 077
-    archive="$2/pairdesk-$(date -u +%Y%m%dT%H%M%SZ).json"
+    backup_dir=$(cd "$2" && pwd)
+    archive="$backup_dir/pairdesk-$(date -u +%Y%m%dT%H%M%SZ).json"
     [[ ! -e "$archive" ]] || { echo 'Backup already exists' >&2; exit 1; }
-    compose cp api:/data/pairdesk.json "$archive"
+    if [[ -n "${PAIRDESK_DATABASE_URL:-}" ]]; then
+      compose run --rm --no-deps -T -v "$backup_dir:/pairdesk-backups" \
+        --entrypoint /pairdesk-admin api export-json --to "/pairdesk-backups/$(basename "$archive")"
+    else
+      compose cp api:/data/pairdesk.json "$archive"
+    fi
     chmod 600 "$archive"
     echo "Account snapshot saved to $archive"
     ;;
