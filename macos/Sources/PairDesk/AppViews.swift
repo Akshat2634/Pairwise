@@ -89,30 +89,38 @@ struct SharedScreenWindow: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 14) {
+            HStack(spacing: 10) {
                 Text("Call · \(max(1, rtc.participants.count))").font(.headline).lineLimit(1)
                 if rtc.isReconnecting {
-                    Label(rtc.isSharing ? "Reconnecting · control paused" : "Reconnecting call…", systemImage: "arrow.triangle.2.circlepath")
+                    Label(rtc.isSharing ? "Reconnecting · control paused" : "Reconnecting", systemImage: "arrow.triangle.2.circlepath")
                         .font(.caption).foregroundStyle(.orange).lineLimit(1)
                 }
                 if let shareStatus {
                     Label(shareStatus, systemImage: rtc.controlState.isGranted ? "cursorarrow.motionlines" : "display")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                        .layoutPriority(1)
                 }
+                Spacer(minLength: 0)
                 if rtc.screenTrack != nil && !rtc.isSharing {
-                    Label(rtc.screenNetworkQuality.label, systemImage: "waveform.path")
-                        .font(.caption).foregroundStyle(networkQualityColor).lineLimit(1)
-                        .help("Estimated shared-screen network round-trip time. This does not measure image readability or local CPU load.")
-                    Label(rtc.screenStreamMetrics.summary, systemImage: "rectangle.inset.filled")
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        .help("Measured resolution, frame rate, and cumulative received-stream packet loss. These are viewer-side WebRTC statistics, not a full picture-quality score.")
-                    if let firstFrame = rtc.screenTimeToFirstFrameMilliseconds {
-                        Label("First frame · \(firstFrame) ms", systemImage: "stopwatch")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            .help("Elapsed time from attaching this screen track in the viewer until LiveKit reports its first rendered frame. It excludes invitation and call setup time.")
+                    Menu {
+                        Text("Network · \(rtc.screenNetworkQuality.label)")
+                        Text("Screen · \(rtc.screenStreamMetrics.summary)")
+                        if let firstFrame = rtc.screenTimeToFirstFrameMilliseconds {
+                            Text("First frame · \(firstFrame) ms")
+                        }
+                    } label: {
+                        Label("Quality", systemImage: "waveform.path")
+                            .foregroundStyle(networkQualityColor)
                     }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .help("Shared-screen quality details")
+                    .accessibilityLabel("Shared-screen quality details")
                 }
-                Spacer()
+            }
+            .padding(.horizontal, 14).padding(.vertical, 7)
+            Divider()
+            HStack(spacing: 7) {
                 Button {
                     Task { do { try await store.setMicrophoneEnabled(!rtc.isMicrophoneEnabled) } catch { store.error = error.localizedDescription } }
                 } label: {
@@ -127,13 +135,13 @@ struct SharedScreenWindow: View {
                     laserMode = false
                     annotationStrokeID = nil
                 } label: {
-                    Label(annotationMode ? "Done" : "Draw",
-                          systemImage: annotationMode ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
+                    Image(systemName: annotationMode ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
                 }
                 .buttonStyle(.bordered)
                 .tint(annotationMode ? Theme.accent : nil)
                 .disabled(!rtc.canAnnotateScreen)
                 .help(rtc.annotationsAllowed ? "Draw temporary marks on the shared screen" : "The sharer disabled annotations")
+                .accessibilityLabel(annotationMode ? "Done drawing" : "Draw on shared screen")
                 Button {
                     laserMode.toggle()
                     annotationMode = false
@@ -146,11 +154,6 @@ struct SharedScreenWindow: View {
                 .disabled(!rtc.canAnnotateScreen)
                 .accessibilityLabel(laserMode ? "Done pointing" : "Laser pointer")
                 .help("Point at the screen with a temporary, color-coded laser. It fades automatically.")
-                if !rtc.screenAnnotations.isEmpty || !rtc.screenAnnotationLasers.isEmpty {
-                    Button("Clear marks") { rtc.clearScreenAnnotations() }
-                        .buttonStyle(.bordered)
-                        .help("Clear your marks" + (rtc.isSharing ? " from the shared screen" : ""))
-                }
                 Button {
                     Task { do { try await rtc.setCameraEnabled(!rtc.isCameraEnabled) } catch { store.error = error.localizedDescription } }
                 } label: {
@@ -180,12 +183,12 @@ struct SharedScreenWindow: View {
                     .accessibilityLabel("Choose camera")
                 }
                 Button { showClipboard = true } label: {
-                    Label(rtc.clipboardSyncEnabled ? "Clipboard sync on" : "Clipboard",
-                          systemImage: rtc.clipboardSyncEnabled ? "doc.on.clipboard.fill" : "doc.on.clipboard")
+                    Image(systemName: rtc.clipboardSyncEnabled ? "doc.on.clipboard.fill" : "doc.on.clipboard")
                 }
                 .buttonStyle(.bordered)
                 .tint(rtc.clipboardSyncEnabled ? Theme.accent : nil)
                 .help(rtc.clipboardSyncEnabled ? "Copied text is shared with this call until you turn sync off" : "Send text to a teammate or paste received text on this Mac")
+                .accessibilityLabel(rtc.clipboardSyncEnabled ? "Clipboard sync on" : "Clipboard")
                 Menu {
                     if store.availablePeople.isEmpty {
                         Text("No one else is available right now")
@@ -197,16 +200,42 @@ struct SharedScreenWindow: View {
                         }
                     }
                 } label: {
-                    Label("Add teammate", systemImage: "person.badge.plus")
+                    Label("Add", systemImage: "person.badge.plus")
                 }
                 .disabled(!store.canAddPerson || store.busy)
                 .help(store.canAddPerson ? "Add someone to this call" : "This call is full")
-                Button(rtc.isSharing ? "Stop sharing" : "Share screen") { if rtc.isSharing { Task { await store.stopSharing() } } else { sourcePicker = true } }
-                if rtc.isSharing { Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy) }
-                Button { showTranscript.toggle() } label: { Image(systemName: "text.bubble") }.help("Local transcript")
-                Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
-                Button("Hang up") { Task { await store.leave() } }.tint(.red)
-            }.buttonStyle(.borderless).padding(.horizontal, 16).padding(.vertical, 9)
+                .accessibilityLabel("Add teammate")
+                Button { if rtc.isSharing { Task { await store.stopSharing() } } else { sourcePicker = true } } label: {
+                    Label(rtc.isSharing ? "Stop share" : "Share screen", systemImage: rtc.isSharing ? "rectangle.on.rectangle.slash" : "rectangle.on.rectangle")
+                }
+                .buttonStyle(.bordered)
+                .help(rtc.isSharing ? "Stop sharing your screen" : "Share your screen")
+                Menu {
+                    if rtc.isSharing {
+                        Button("Change source…") { Task { await store.changeScreenSource() } }.disabled(store.busy)
+                    }
+                    if !rtc.screenAnnotations.isEmpty || !rtc.screenAnnotationLasers.isEmpty {
+                        Button("Clear marks") { rtc.clearScreenAnnotations() }
+                    }
+                    Button("Local transcript") { showTranscript.toggle() }
+                    Button("Full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("More call controls")
+                .accessibilityLabel("More call controls")
+                Spacer(minLength: 4)
+                Button("End call") { Task { await store.leave() } }
+                    .buttonStyle(DangerButtonStyle())
+                    .help("Leave this call")
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(Theme.surface)
             if rtc.participants.contains(where: { !$0.isLocal }) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 20) {
@@ -271,8 +300,8 @@ struct SharedScreenWindow: View {
                     } else {
                         VStack(spacing: 16) {
                             Image(systemName: rtc.isSharing ? "display.and.arrow.up" : "phone").font(.system(size: 44))
-                            Text(rtc.isSharing ? (rtc.isSharingWindow ? "Your window is shared" : "Your display is shared") : (store.activeRoom == nil ? "Call ended" : "Voice call connected"))
-                            Text(rtc.isSharing ? (rtc.isSharingWindow ? "Window sharing is view-only. Use the menu bar to stop sharing." : "Your teammates can control your shared display. Use the menu bar to stop control.") : "Call controls and your team are in the PairDesk menu bar.").font(.caption).foregroundStyle(.secondary)
+                            Text(rtc.isSharing ? (rtc.isSharingWindow ? "Your window is shared" : "Your display is shared") : (store.activeRoom == nil ? "Call ended" : "Waiting for a screen share"))
+                            Text(rtc.isSharing ? (rtc.isSharingWindow ? "Window sharing is view-only. Use the menu bar to stop sharing." : "Your teammates can control your shared display. Use the menu bar to stop control.") : (store.activeRoom == nil ? "Start a new call from the PairDesk menu bar." : "Your teammate can start sharing at any time. Call controls and your team are in the PairDesk menu bar.")).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }.padding(30)
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
