@@ -92,8 +92,8 @@ set -e
 # the disposable rules/pipes. This distinguishes configured impairment from
 # evidence that CI media traffic traversed the conditioner.
 echo "Network conditioner PF rules and packet counters:"
-sudo -n pfctl -a "$ANCHOR" -vvs rules
+sudo -n pfctl -a "$ANCHOR" -sd
 echo "Network conditioner dummynet pipe counters:"
-sudo -n dnctl pipe show "$PIPE_IN" "$PIPE_OUT"
+sudo -n dnctl show
 
 exit "$COMMAND_STATUS"
