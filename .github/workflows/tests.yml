@@ -61,6 +61,7 @@ jobs:
           PAIRDESK_TEST_MEDIA_URL: ws://127.0.0.1:7880
           PAIRDESK_TEST_MEDIA_API_URL: http://127.0.0.1:7880
           PAIRDESK_MEDIA_BENCHMARK_OUTPUT: ${{ github.workspace }}/media-benchmark-output/pairwise-media-benchmark.json
+          PAIRDESK_NETWORK_CONDITION_REPORT: ${{ github.workspace }}/media-benchmark-output/network-conditioner.json
           PAIRDESK_BENCHMARK_COMMIT: ${{ github.sha }}
           PAIRDESK_BENCHMARK_RUN_ID: ${{ github.run_id }}
           PAIRDESK_TEST_FILTER: CallIntegrationTests/testOneToOneSyntheticScreenQualityProfile|CallIntegrationTests/testFourNativeClientsCameraPublicationAndExclusiveScreenPermission
@@ -79,7 +80,7 @@ jobs:
       - name: Validate synthetic media benchmark
         if: always()
         run: |
-          python3 scripts/tests/test_validate_media_benchmark.py
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py'
           test -s media-benchmark-output/pairwise-media-benchmark-baseline-2p.json
           test -s media-benchmark-output/pairwise-media-benchmark-baseline-4p.json
           test -s media-benchmark-output/pairwise-media-benchmark-constrained-2p.json
@@ -88,13 +89,14 @@ jobs:
             media-benchmark-output/pairwise-media-benchmark-baseline-2p.json \
             media-benchmark-output/pairwise-media-benchmark-baseline-4p.json \
             media-benchmark-output/pairwise-media-benchmark-constrained-2p.json \
-            media-benchmark-output/pairwise-media-benchmark-constrained-4p.json
+            media-benchmark-output/pairwise-media-benchmark-constrained-4p.json \
+            --conditioner media-benchmark-output/network-conditioner.json
       - name: Archive synthetic media benchmark
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: media-quality-${{ github.sha }}-${{ github.run_id }}
-          path: media-benchmark-output/pairwise-media-benchmark-*.json
+          path: media-benchmark-output/*.json
           if-no-files-found: error
       - name: Server race tests and vet
         working-directory: server

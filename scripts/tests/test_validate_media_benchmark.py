@@ -42,8 +42,33 @@ def benchmark(profile: str, participants: int) -> dict:
     }
 
 
+def conditioner() -> dict:
+    return {
+        "schemaVersion": 1,
+        "classification": "synthetic-ci-network-conditioner",
+        "commit": "test-commit",
+        "runID": "test-run",
+        "configured": {
+            "interface": "lo0",
+            "udpPortRange": "17882-17981",
+            "directionalBandwidthKbitPerSecond": 20_000,
+            "delaySequenceMilliseconds": [20, 60, 30, 50],
+            "packetLossProbabilityPercent": 0.5,
+        },
+        "observed": {
+            "packets": 693,
+            "bytes": 166_721,
+            "droppedPackets": 2,
+            "pipes": {
+                "591": {"present": False, "packets": 0, "bytes": 0, "drops": 0},
+                "592": {"present": True, "packets": 693, "bytes": 166_721, "drops": 2},
+            },
+        },
+    }
+
+
 class MediaBenchmarkValidatorTests(unittest.TestCase):
-    def run_validator(self, zero_bitrate: bool = False) -> subprocess.CompletedProcess[str]:
+    def run_validator(self, zero_bitrate: bool = False, zero_drops: bool = False) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory(prefix="pairwise-benchmark-validator-") as temporary:
             reports = []
             for profile in ("baseline", "constrained"):
@@ -54,8 +79,14 @@ class MediaBenchmarkValidatorTests(unittest.TestCase):
                     path = Path(temporary) / f"{profile}-{participants}p.json"
                     path.write_text(json.dumps(report), encoding="utf-8")
                     reports.append(str(path))
+            conditioner_path = Path(temporary) / "network-conditioner.json"
+            conditioner_report = conditioner()
+            if zero_drops:
+                conditioner_report["observed"]["droppedPackets"] = 0
+                conditioner_report["observed"]["pipes"]["592"]["drops"] = 0
+            conditioner_path.write_text(json.dumps(conditioner_report), encoding="utf-8")
             return subprocess.run(
-                [sys.executable, str(VALIDATOR), *reports],
+                [sys.executable, str(VALIDATOR), *reports, "--conditioner", str(conditioner_path)],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -65,11 +96,17 @@ class MediaBenchmarkValidatorTests(unittest.TestCase):
         result = self.run_validator()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("received bitrate 850 kbit/s", result.stdout)
+        self.assertIn("dummynet: 693 packets, 166721 bytes, 2 dropped", result.stdout)
 
     def test_rejects_unmeasured_zero_bitrate(self) -> None:
         result = self.run_validator(zero_bitrate=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("received bitrate must be a positive measured value", result.stderr)
+
+    def test_rejects_conditioner_without_observed_packet_drops(self) -> None:
+        result = self.run_validator(zero_drops=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not observe packet drops", result.stderr)
 
 
 if __name__ == "__main__":

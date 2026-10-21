@@ -3,6 +3,7 @@
 
 import json
 import sys
+import argparse
 from pathlib import Path
 
 
@@ -41,14 +42,15 @@ MEASUREMENTS = {
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: validate-media-benchmark.py REPORT-2p.json REPORT-4p.json", file=sys.stderr)
-        return 2
+    parser = argparse.ArgumentParser()
+    parser.add_argument("reports", nargs="+")
+    parser.add_argument("--conditioner")
+    args = parser.parse_args()
     observed_profiles = set()
     commits = set()
     run_ids = set()
     network_profiles = set()
-    for name in sys.argv[1:]:
+    for name in args.reports:
         report = json.loads(Path(name).read_text(encoding="utf-8"))
         if not isinstance(report, dict) or not set(report).issubset(ALLOWED_FIELDS):
             raise ValueError(f"{name}: benchmark contains an unknown field")
@@ -138,6 +140,55 @@ def main() -> int:
         raise ValueError("benchmark artifacts must include both network conditions")
     if len(commits) != 1 or len(run_ids) != 1:
         raise ValueError("benchmark profiles must come from the same commit and workflow run")
+    if args.conditioner:
+        conditioner_path = Path(args.conditioner)
+        conditioner = json.loads(conditioner_path.read_text(encoding="utf-8"))
+        if not isinstance(conditioner, dict) or set(conditioner) != {
+            "schemaVersion", "classification", "commit", "runID", "configured", "observed"
+        }:
+            raise ValueError("network-conditioner artifact contains unknown or missing fields")
+        if conditioner["schemaVersion"] != 1 or conditioner["classification"] != "synthetic-ci-network-conditioner":
+            raise ValueError("unexpected network-conditioner schema or classification")
+        if conditioner["commit"] not in commits or conditioner["runID"] not in run_ids:
+            raise ValueError("network-conditioner evidence must match the benchmark commit and workflow run")
+        configured = conditioner["configured"]
+        if not isinstance(configured, dict) or configured != {
+            "interface": "lo0",
+            "udpPortRange": "17882-17981",
+            "directionalBandwidthKbitPerSecond": 20_000,
+            "delaySequenceMilliseconds": [20, 60, 30, 50],
+            "packetLossProbabilityPercent": 0.5,
+        }:
+            raise ValueError("network-conditioner configuration does not match the constrained profile")
+        observed = conditioner["observed"]
+        if not isinstance(observed, dict) or set(observed) != {"packets", "bytes", "droppedPackets", "pipes"}:
+            raise ValueError("malformed network-conditioner observations")
+        if not isinstance(observed["packets"], int) or observed["packets"] <= 0:
+            raise ValueError("network conditioner did not classify media packets")
+        if not isinstance(observed["bytes"], int) or observed["bytes"] <= 0:
+            raise ValueError("network conditioner did not account for media bytes")
+        if not isinstance(observed["droppedPackets"], int) or observed["droppedPackets"] <= 0:
+            raise ValueError("network conditioner did not observe packet drops")
+        pipes = observed["pipes"]
+        if not isinstance(pipes, dict) or set(pipes) != {"591", "592"}:
+            raise ValueError("network-conditioner artifact must include both directional pipes")
+        for pipe_id, pipe in pipes.items():
+            if not isinstance(pipe, dict) or set(pipe) != {"present", "packets", "bytes", "drops"}:
+                raise ValueError(f"pipe {pipe_id}: malformed counters")
+            if not isinstance(pipe["present"], bool) or any(
+                not isinstance(pipe[field], int) or pipe[field] < 0 for field in ("packets", "bytes", "drops")
+            ):
+                raise ValueError(f"pipe {pipe_id}: invalid counters")
+        if sum(pipe["packets"] for pipe in pipes.values()) != observed["packets"]:
+            raise ValueError("network-conditioner packet total does not match directional counters")
+        if sum(pipe["bytes"] for pipe in pipes.values()) != observed["bytes"]:
+            raise ValueError("network-conditioner byte total does not match directional counters")
+        if sum(pipe["drops"] for pipe in pipes.values()) != observed["droppedPackets"]:
+            raise ValueError("network-conditioner drop total does not match directional counters")
+        print(
+            f"dummynet: {observed['packets']} packets, {observed['bytes']} bytes, "
+            f"{observed['droppedPackets']} dropped across reported pipes"
+        )
     print("All four synthetic baseline/constrained benchmark profiles passed schema, network, and privacy validation.")
     return 0
 

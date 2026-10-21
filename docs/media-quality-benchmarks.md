@@ -8,6 +8,8 @@ The macOS CI job runs native clients against an isolated local API and LiveKit s
 
 The CI integration suite emits four metadata-only synthetic screen-track samples: baseline and constrained variants for two clients (1:1) and four clients. Each records rendered dimensions, callback-based observed frame rate, receiver-side RTP bitrate, time from test receiver setup to first frame, recovery time after the sender pauses and resumes, receiver loss, selected-path RTT, and an allowlisted description of the applied network profile. Files are validated together against one commit and workflow run, then archived under `media-quality-<commit>-<run-id>`. No media frames are written to disk. The constrained job changes the disposable macOS runner's PF ruleset temporarily and restores `/etc/pf.conf` during cleanup; it is deliberately prohibited outside CI.
 
+The artifact also includes `network-conditioner.json`, containing aggregate packet, byte, and drop counts per dummynet direction, plus the configured interface, UDP range, bandwidth, delay sequence, and loss probability. It excludes IP addresses and packet contents. Validation fails if the constrained run reports no classified media packets or no packet drops. Receiver RTP loss may still be zero when WebRTC recovers dropped packets; dummynet counters independently show drops at the test-network layer.
+
 The report validator requires receiver-side packet loss, RTP bitrate, and selected-path RTT for both participant counts and both network profiles; CI fails if these WebRTC stats are unavailable, if measured bitrate is nonpositive, or if the constrained profile does not raise selected-path RTT. Pointer-to-render latency, sender/receiver CPU, and readability remain explicitly unmeasured. CI archives the measurements but does not yet set release budgets or fail on a performance threshold. The four-client profile represents the expected 3–4 participant call.
 
 Do not treat CI results as evidence of readable 4K text, production internet quality, screen-share CPU cost, or pointer-to-render latency. No performance budget should be set until a repeatable baseline is captured on supported Macs.
@@ -33,7 +35,7 @@ Run at the default 1440p30 preset and the 4K30 maximum. Repeat once with a const
 ## Still needed for issue #35
 
 - A repeatable synthetic network conditioner now runs in CI for the 1:1 and four-client scenarios, with profile metadata and per-commit artifacts. This is a first transport benchmark slice, not a production quality baseline.
-- Verify the macOS PF/dummynet path on GitHub-hosted macOS runners and review repeated loss/recovery behavior before relying on its reports.
+- Repeat the macOS PF/dummynet run and review direction-specific loss/recovery before relying on its reports. The first counter capture confirmed 693 packets and 166,721 bytes with 2 drops on pipe 592; pipe 591 had no reported flow, so symmetric direction coverage remains unproven.
 - Packet loss, selected-path RTT, pointer response, and actual share interruption/recovery under induced network outage on a constrained path. The current sender-pause recovery metric measures a synthetic source stop/start only; loopback packet loss and RTT are not internet-path baselines.
 - CPU and readability baselines on supported hardware, plus validated regression thresholds.
 - A 3–4 participant real-device reference run and confirmation that exported diagnostics remain content-free.

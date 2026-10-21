@@ -92,8 +92,18 @@ set -e
 # the disposable rules/pipes. This distinguishes configured impairment from
 # evidence that CI media traffic traversed the conditioner.
 echo "Network conditioner PF rules and packet counters:"
-sudo -n pfctl -a "$ANCHOR" -sd
+sudo -n pfctl -a "$ANCHOR" -sd > "$TMP_DIR/pf-dummynet-rules.txt"
+cat "$TMP_DIR/pf-dummynet-rules.txt"
 echo "Network conditioner dummynet pipe counters:"
-sudo -n dnctl show
+sudo -n dnctl show > "$TMP_DIR/dummynet-counters.txt"
+cat "$TMP_DIR/dummynet-counters.txt"
+if [[ -n "${PAIRDESK_NETWORK_CONDITION_REPORT:-}" ]]; then
+  python3 scripts/write-network-condition-report.py \
+    --rules "$TMP_DIR/pf-dummynet-rules.txt" \
+    --counters "$TMP_DIR/dummynet-counters.txt" \
+    --output "$PAIRDESK_NETWORK_CONDITION_REPORT" \
+    --commit "${PAIRDESK_BENCHMARK_COMMIT:-unknown}" \
+    --run-id "${PAIRDESK_BENCHMARK_RUN_ID:-unknown}"
+fi
 
 exit "$COMMAND_STATUS"
