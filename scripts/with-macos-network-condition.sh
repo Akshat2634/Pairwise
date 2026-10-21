@@ -78,9 +78,22 @@ sudo -n pfctl -a "$ANCHOR" -f "$TMP_DIR/dummynet.rules"
 ) &
 JITTER_PID=$!
 
-PAIRDESK_BENCHMARK_PROFILE=constrained \
-PAIRDESK_NETWORK_CONDITION_ACTIVE=1 \
-PAIRDESK_NETWORK_CONDITION_BANDWIDTH_KBIT=20000 \
-PAIRDESK_NETWORK_CONDITION_DELAY_SEQUENCE_MS=20,60,30,50 \
-PAIRDESK_NETWORK_CONDITION_PACKET_LOSS_PERCENT=0.5 \
-  "$@"
+export PAIRDESK_BENCHMARK_PROFILE=constrained
+export PAIRDESK_NETWORK_CONDITION_ACTIVE=1
+export PAIRDESK_NETWORK_CONDITION_BANDWIDTH_KBIT=20000
+export PAIRDESK_NETWORK_CONDITION_DELAY_SEQUENCE_MS=20,60,30,50
+export PAIRDESK_NETWORK_CONDITION_PACKET_LOSS_PERCENT=0.5
+set +e
+"$@"
+COMMAND_STATUS=$?
+set -e
+
+# Emit the actual PF rule and dummynet pipe counters before cleanup removes
+# the disposable rules/pipes. This distinguishes configured impairment from
+# evidence that CI media traffic traversed the conditioner.
+echo "Network conditioner PF rules and packet counters:"
+sudo -n pfctl -a "$ANCHOR" -sd
+echo "Network conditioner dummynet pipe counters:"
+sudo -n dnctl show
+
+exit "$COMMAND_STATUS"
