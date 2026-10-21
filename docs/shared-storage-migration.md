@@ -17,24 +17,39 @@ using this design for a substantially larger deployment.
 
 ## Migration
 
-1. Take and verify an encrypted copy of `/data/pairdesk.json`; schedule a short
-   maintenance window and stop the API and push worker.
+1. Schedule a short maintenance window and take a private JSON-mode backup with
+   `bash infra/production/manage.sh backup /secure-backup`. Verify that the
+   resulting file is valid JSON and retain an encrypted copy outside the VM.
+   Stop the API and push worker before importing so no writes are lost.
 2. Use the dedicated `pairdesk-pg` PostgreSQL 16 instance in `us-central1`.
    It has automated daily backups (7 retained), 7-day point-in-time recovery,
    SSL required, and no authorized public client networks. The `pairdesk`
    database and least-privilege `pairdesk_app` role are provisioned. Its
    password is held in Secret Manager as `pairdesk-db-password`; never copy it
-   into this repository or a committed `.env` file. The instance is currently
-   reached through the Cloud SQL Auth Proxy. Production API connectivity still
-   needs a workload identity and a deployment secret/configuration path before
-cutover. A dedicated runtime service account is prepared as
-`pairdesk-api-runtime@named-tube-444103-p0.iam.gserviceaccount.com`; it has the
-Cloud SQL Client role and Secret Accessor on this database password secret.
-It is not yet attached to the production VM.
-3. Run `PAIRDESK_DATABASE_URL=... pairdesk-admin import-json --from
-   /data/pairdesk.json`. Import replaces the singleton state atomically and
-   preserves accounts, password hashes, sessions, device registrations, audit
-   entries, and unexpired pending jobs.
+   into this repository or a committed `.env` file. A dedicated runtime
+   service account is prepared as
+   `pairdesk-api-runtime@named-tube-444103-p0.iam.gserviceaccount.com`; it has
+   the Cloud SQL Client role and Secret Accessor on this database password
+   secret. It is not yet attached to the production VM. The isolated restore
+   drill used the Cloud SQL Auth Proxy; the production API does not yet use it.
+3. Import the verified snapshot while the API remains stopped. Start only the
+   proxy, then run the admin importer against the private backup path:
+
+   ```sh
+   docker compose -p pairdesk-prod --env-file infra/production/generated/.env \
+     -f infra/production/docker-compose.yml \
+     -f infra/production/docker-compose.cloudsql.yml up -d cloud-sql-proxy
+   docker compose -p pairdesk-prod --env-file infra/production/generated/.env \
+     -f infra/production/docker-compose.yml \
+     -f infra/production/docker-compose.cloudsql.yml run --rm --no-deps \
+     -v /secure-backup:/pairdesk-backups:ro --entrypoint /pairdesk-admin api \
+     import-json --from /pairdesk-backups/PAIRWISE-BACKUP.json
+   ```
+
+   Import replaces the singleton state atomically and preserves accounts,
+   password hashes, sessions, device registrations, audit entries, and
+   unexpired pending jobs. Export the database to a separate temporary JSON
+   file, normalize both JSON files, and compare them before starting the API.
 4. Start one API instance with the same DSN. Verify `/healthz`, `/readyz`,
    existing-user login, presence, call creation, and outbox delivery before
    enabling additional replicas.
@@ -42,9 +57,42 @@ It is not yet attached to the production VM.
    `PAIRDESK_TEST_DATABASE_URL=... go test ./internal/app -run
    TestPostgresConcurrentWorkersLeasePushOnce -count=1`.
 
+Only after the import comparison passes should the API be started in Cloud SQL
+mode with `bash infra/production/manage.sh up`. If import or comparison fails,
+keep the API stopped and use the pre-cutover JSON snapshot as the recovery
+source.
+
 The initial schema is created idempotently on application start. Back up before
 upgrading; keep the JSON export until account owners confirm sign-in and call
 flows after the migration.
+
+## Production proxy configuration
+
+The production stack has an optional Cloud SQL Auth Proxy Compose override. On
+the VM, after the runtime service account is attached and the VM has the
+`cloud-platform` API scope, run:
+
+```sh
+python3 infra/production/configure-cloudsql.py \
+  --project named-tube-444103-p0 \
+  --instance pairdesk-pg \
+  --secret pairdesk-db-password
+```
+
+The helper verifies the instance is `RUNNABLE`, reads the password from Secret
+Manager without printing it, URL-escapes it, and writes the DSN and instance
+connection name into `infra/production/generated/.env` with mode `0600`.
+`manage.sh` then includes the pinned Cloud SQL Auth Proxy sidecar, which uses
+the VM's attached identity and is reachable only on the private Compose
+network. If the connection name is configured without a matching DSN, startup
+fails closed. A non-Cloud-SQL PostgreSQL URL can still be used without the
+sidecar.
+
+In Cloud SQL mode, `manage.sh backup DIRECTORY` exports the current PostgreSQL
+state through the app's store before saving a mode-`0600` JSON snapshot. In
+JSON mode it retains the atomic file-copy backup. Keep the snapshot from
+before cutover separately from later PostgreSQL exports so rollback preserves
+the exact pre-migration state.
 
 ## Rollback
 
@@ -67,13 +115,17 @@ protection enabled. This proves the Cloud SQL backup/restore path, not recovery
 of Pairwise production accounts: the live API has not been migrated and
 existing-user sign-in after a production data import has not yet been tested.
 
-Before cutover, attach the prepared service account to the API VM (currently it
-has no attached service account) and configure the Cloud SQL Auth Proxy as a
-managed service or sidecar. Attaching an identity requires a VM stop/start and
-must be scheduled with the application maintenance window. Then follow the
-migration steps, verify
-health/readiness, existing-user login, presence, calls, and push outbox
-delivery, and retain the JSON export for rollback. Do not scale API replicas
+Before cutover, take and verify the JSON-mode backup, then attach the prepared
+service account to the API VM (currently it has no attached service account)
+with the Cloud SQL Client and Secret Accessor roles and the Cloud SQL API
+scope. Attaching an identity requires a VM stop/start and must be scheduled
+with the application maintenance window. Run the proxy configuration helper,
+stop the API, import the JSON snapshot into PostgreSQL, export the database
+state back to a temporary JSON file and compare the complete structures before
+restarting the API in Cloud SQL mode. If import or comparison fails, keep the
+API stopped until the operator chooses recovery; the original JSON snapshot
+remains the rollback source. Then verify health/readiness, existing-user
+login, presence, calls, and push outbox delivery. Do not scale API replicas
 until the PostgreSQL-backed API and push worker pass the two-instance
 concurrency check. The current VM still runs JSON-volume mode.
 

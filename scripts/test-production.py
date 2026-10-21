@@ -35,6 +35,27 @@ try:
     # TLS routing test doesn't publish media ports; it doesn't exercise ICE.
     content = content.replace("      - '7881:7881/tcp'\n      - '50000-50100:50000-50100/udp'\n      - '3478:3478/udp'", "      - '127.0.0.1:18881:7881/tcp'")
     (fixture / 'docker-compose.yml').write_text(content)
+    # Validate that a configured Cloud SQL DSN selects a private, non-published
+    # Auth Proxy service and wires the API to it. Do not connect to GCP here.
+    cloudsql_env = fixture / 'cloudsql-test.env'
+    cloudsql_env.write_text(
+        (fixture / 'generated/.env').read_text()
+        + 'PAIRDESK_CLOUD_SQL_CONNECTION_NAME=test-project:us-central1:pairdesk-pg\n'
+        + 'PAIRDESK_DATABASE_URL=postgres://pairdesk_app:test@cloud-sql-proxy:5432/pairdesk?sslmode=disable\n'
+    )
+    cloudsql_compose = compose.copy()
+    env_index = cloudsql_compose.index('--env-file') + 1
+    cloudsql_compose[env_index] = str(cloudsql_env)
+    cloudsql_compose += ['-f', str(ROOT / 'infra/production/docker-compose.cloudsql.yml'), 'config', '--format', 'json']
+    cloudsql_config = json.loads(subprocess.run(cloudsql_compose, check=True, capture_output=True, text=True).stdout)
+    proxy = cloudsql_config['services']['cloud-sql-proxy']
+    assert proxy['image'] == 'gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.26.2'
+    assert proxy['expose'] == ['5432'] and not proxy.get('ports')
+    assert 'test-project:us-central1:pairdesk-pg' in proxy['command']
+    assert cloudsql_config['services']['api']['environment']['PAIRDESK_DATABASE_URL'].startswith(
+        'postgres://pairdesk_app:test@cloud-sql-proxy:5432/'
+    )
+    assert 'cloud-sql-proxy' in cloudsql_config['services']['api']['depends_on']
     subprocess.run(compose + ['build', 'api'], check=True)
     admin_password = secrets.token_hex(16)
     subprocess.run(compose + ['run', '--rm', '--no-deps', '-T', '-e', 'PAIRDESK_ADMIN_PASSWORD', '--entrypoint', '/pairdesk-admin', 'api', 'create-user', '--admin', '--name', 'Synthetic Operations Administrator', '--email', 'admin@pairdesk.invalid'], env={**os.environ, 'PAIRDESK_ADMIN_PASSWORD': admin_password}, check=True)
