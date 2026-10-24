@@ -17,6 +17,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  workflow-lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+      - name: Lint GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
   android:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -48,6 +59,8 @@ jobs:
         run: bash scripts/ci-api-image.sh
       - name: Test release tag ancestry validation
         run: python3 -m unittest discover -s scripts/tests -p 'test_validate_release_tag.py'
+      - name: Test production API deploy and rollback logic
+        run: python3 -m unittest discover -s scripts/tests -p 'test_manage_deploy_api.py'
 
   ios:
     runs-on: macos-15
