@@ -46,6 +46,8 @@ jobs:
         env:
           PAIRDESK_BUILD_COMMIT: ${{ github.sha }}
         run: bash scripts/ci-api-image.sh
+      - name: Test release tag ancestry validation
+        run: python3 -m unittest discover -s scripts/tests -p 'test_validate_release_tag.py'
 
   ios:
     runs-on: macos-15
