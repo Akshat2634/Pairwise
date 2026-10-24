@@ -1,0 +1,92 @@
+name: Deploy Pairwise to GCP production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DEPLOY to restart only the production API after health verification
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pairwise-gcp-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate deployment request and configuration
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          GCP_PROJECT: ${{ vars.PAIRDESK_GCP_PROJECT_ID }}
+          GCP_ZONE: ${{ vars.PAIRDESK_GCP_ZONE }}
+          GCP_VM: ${{ vars.PAIRDESK_GCP_VM }}
+          WIF_PROVIDER: ${{ vars.PAIRDESK_GCP_WIF_PROVIDER }}
+          DEPLOY_SERVICE_ACCOUNT: ${{ vars.PAIRDESK_GCP_DEPLOYER_SA }}
+        run: |
+          set -euo pipefail
+          [[ "$CONFIRMATION" == 'DEPLOY' ]] || { echo 'Type DEPLOY to proceed.' >&2; exit 1; }
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]] || { echo 'Production deploys must run from main.' >&2; exit 1; }
+          for name in GCP_PROJECT GCP_ZONE GCP_VM WIF_PROVIDER DEPLOY_SERVICE_ACCOUNT; do
+            [[ -n "${!name:-}" ]] || { echo "Missing repository variable: $name" >&2; exit 1; }
+          done
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.PAIRDESK_GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.PAIRDESK_GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.PAIRDESK_GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ vars.PAIRDESK_GCP_PROJECT_ID }}
+
+      - name: Build source-only deployment archive
+        id: archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/pairdesk-${GITHUB_SHA}.tar.gz"
+          git archive --format=tar.gz "$GITHUB_SHA" > "$archive"
+          if tar -tzf "$archive" | grep -Eq '(^|/)generated/|(^|/)\.env$'; then
+            echo 'Refusing to upload an archive containing generated configuration or an .env file.' >&2
+            exit 1
+          fi
+          echo "path=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload source over IAP
+        env:
+          GCP_PROJECT: ${{ vars.PAIRDESK_GCP_PROJECT_ID }}
+          GCP_ZONE: ${{ vars.PAIRDESK_GCP_ZONE }}
+          GCP_VM: ${{ vars.PAIRDESK_GCP_VM }}
+          ARCHIVE: ${{ steps.archive.outputs.path }}
+        run: >-
+          gcloud compute scp --quiet --project "$GCP_PROJECT" --zone "$GCP_ZONE"
+          --tunnel-through-iap "$ARCHIVE"
+          "$GCP_VM:/tmp/pairdesk-${GITHUB_SHA}.tar.gz"
+
+      - name: Deploy API and verify exact build
+        env:
+          GCP_PROJECT: ${{ vars.PAIRDESK_GCP_PROJECT_ID }}
+          GCP_ZONE: ${{ vars.PAIRDESK_GCP_ZONE }}
+          GCP_VM: ${{ vars.PAIRDESK_GCP_VM }}
+        run: |
+          set -euo pipefail
+          archive="/tmp/pairdesk-${GITHUB_SHA}.tar.gz"
+          remote_command="set -euo pipefail; archive='$archive'; trap 'sudo rm -f \"\$archive\"' EXIT; sudo tar -xzf \"\$archive\" -C /opt/pairdesk; sudo /opt/pairdesk/infra/production/manage.sh deploy-api '$GITHUB_SHA'"
+          gcloud compute ssh "$GCP_VM" --quiet --project "$GCP_PROJECT" --zone "$GCP_ZONE" \
+            --tunnel-through-iap --command "$remote_command"

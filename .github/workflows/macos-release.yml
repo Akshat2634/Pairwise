@@ -111,9 +111,11 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --keychain "$KEYCHAIN_PATH"
-          echo "PAIRDESK_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "PAIRDESK_KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
-          echo "PAIRDESK_CERTIFICATE_PATH=$CERTIFICATE_PATH" >> "$GITHUB_ENV"
+          {
+            echo "PAIRDESK_KEYCHAIN_PATH=$KEYCHAIN_PATH"
+            echo "PAIRDESK_KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD"
+            echo "PAIRDESK_CERTIFICATE_PATH=$CERTIFICATE_PATH"
+          } >> "$GITHUB_ENV"
 
       - name: Build app bundle
         env:

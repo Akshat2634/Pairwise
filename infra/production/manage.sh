@@ -32,6 +32,66 @@ case "${1:-}" in
     build_commit=${PAIRDESK_BUILD_COMMIT:-$(git -C "$ROOT/../.." rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')}
     PAIRDESK_BUILD_COMMIT="$build_commit" compose up -d --build
     ;;
+  deploy-api)
+    [[ "$(uname -s)" == Linux ]] || { echo 'API deployment is restricted to the Linux host' >&2; exit 1; }
+    [[ $# == 2 && "$2" =~ ^[0-9a-f]{40}$ ]] || { echo 'Usage: manage.sh deploy-api FULL_40_CHARACTER_COMMIT_SHA' >&2; exit 2; }
+    build_commit=$2
+    previous_image=$(compose images -q api | head -n 1)
+    [[ -n "$previous_image" ]] || { echo 'Cannot deploy without a current API image to roll back to' >&2; exit 1; }
+    rollback_image="pairdesk-prod-api:rollback-${build_commit:0:12}"
+    docker image tag "$previous_image" "$rollback_image"
+    if ! PAIRDESK_BUILD_COMMIT="$build_commit" compose build api; then
+      echo 'API image build failed; the running service was left unchanged.' >&2
+      exit 1
+    fi
+    if ! PAIRDESK_BUILD_COMMIT="$build_commit" compose up -d --no-deps --no-build api; then
+      echo 'API container update failed; restoring the previous image.' >&2
+      if ! docker image tag "$previous_image" pairdesk-prod-api:latest; then
+        echo 'Could not restore the previous API image tag; manual recovery is required.' >&2
+        exit 1
+      fi
+      if ! compose up -d --no-deps --no-build api; then
+        echo 'Automatic rollback failed; inspect pairdesk-prod-api and the previous image immediately.' >&2
+        exit 1
+      fi
+      exit 1
+    fi
+    ready=0
+    for attempt in {1..24}; do
+      if python3 - "$API_DOMAIN" "$build_commit" <<'PYDEPLOY'
+import json, sys, urllib.request
+
+domain, expected_commit = sys.argv[1:]
+def read(path):
+    with urllib.request.urlopen(f"https://{domain}{path}", timeout=8) as response:
+        return json.load(response)
+
+try:
+    version = read("/version")
+    readiness = read("/readyz")
+    if version.get("buildCommit") == expected_commit and readiness.get("ok") is True and readiness.get("media") is True:
+        raise SystemExit(0)
+except Exception:
+    pass
+raise SystemExit(1)
+PYDEPLOY
+      then
+        ready=1
+        break
+      fi
+      sleep 5
+    done
+    if [[ "$ready" != 1 ]]; then
+      echo 'New API did not report the expected build and healthy media path; restoring the previous image.' >&2
+      docker image tag "$previous_image" pairdesk-prod-api:latest
+      if ! compose up -d --no-deps --no-build api; then
+        echo 'Automatic rollback failed; inspect pairdesk-prod-api and the previous image immediately.' >&2
+        exit 1
+      fi
+      exit 1
+    fi
+    echo "API deployment healthy at commit $build_commit; previous image retained as $rollback_image"
+    ;;
   admin)
     [[ $# == 3 ]] || { echo 'Usage: manage.sh admin NAME EMAIL' >&2; exit 1; }
     # Offline CLI must never compete with the API writer. Restart even if user creation fails.
