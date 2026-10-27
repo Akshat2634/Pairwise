@@ -27,6 +27,7 @@ for i in 1 2 3 4 5; do
   "$FIXTURE/admin" create-user --name "Integration $i" --email "integration-$i@pairdesk.invalid" >/dev/null
   "$FIXTURE/admin" create-user --name "Direct integration $i" --email "integration-direct-$i@pairdesk.invalid" >/dev/null
   "$FIXTURE/admin" create-user --name "Join integration $i" --email "integration-join-$i@pairdesk.invalid" >/dev/null
+  "$FIXTURE/admin" create-user --name "Notification integration $i" --email "integration-notification-$i@pairdesk.invalid" >/dev/null
 done
 for i in 1 2 3; do
   "$FIXTURE/admin" create-user --name "Annotation integration $i" --email "integration-annotation-$i@pairdesk.invalid" >/dev/null
@@ -42,6 +43,6 @@ if [ "$ready" -ne 1 ]; then cat "$FIXTURE/api.log" >&2; exit 1; fi
 export PAIRDESK_TEST_PASSWORD
 PAIRDESK_TEST_API=http://127.0.0.1:18081
 export PAIRDESK_TEST_API
-TEST_FILTER=${PAIRDESK_TEST_FILTER:-'CallIntegrationTests|DirectCallIntegrationTests|CallFeedbackIntegrationTests|RemoteMuteIntegrationTests|HostCursorIntegrationTests|ScreenClipboardIntegrationTests'}
+TEST_FILTER=${PAIRDESK_TEST_FILTER:-'CallIntegrationTests|DirectCallIntegrationTests|CallFeedbackIntegrationTests|IncomingCallIntegrationTests|RemoteMuteIntegrationTests|HostCursorIntegrationTests|ScreenClipboardIntegrationTests'}
 (cd macos && swift test -j 4 --filter "$TEST_FILTER")
 echo 'Native call/media integration profiles verified against the selected LiveKit endpoint; synthetic accounts and API cleaned up.'

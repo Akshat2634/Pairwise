@@ -64,6 +64,10 @@ export PAIRDESK_TEST_MEDIA_URL=${PAIRDESK_TEST_MEDIA_URL:-ws://127.0.0.1:7880}
 export PAIRDESK_TEST_MEDIA_API_URL=${PAIRDESK_TEST_MEDIA_API_URL:-http://127.0.0.1:7880}
 export PAIRDESK_LIVEKIT_NODE_IP="$NODE_IP"
 
+# Exercise call prompts against the same real API/media stack before applying
+# network constraints. The ordinary native test run has no integration server.
+PAIRDESK_TEST_FILTER=IncomingCallIntegrationTests sh scripts/test-call.sh
+
 PAIRDESK_BENCHMARK_PROFILE=baseline sh scripts/test-call.sh
 # Camera publication is exercised by the baseline. Keep the constrained run
 # focused on screen quality and cursor behavior; camera frame delivery under

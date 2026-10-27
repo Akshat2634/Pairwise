@@ -40,7 +40,8 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         popover.delegate = self
 
         // @Published emits before the value lands; hop once so reads see the new state.
-        Publishers.Merge(store.$callInvitations.map { _ in () }, store.$activeRoom.map { _ in () })
+        Publishers.Merge3(store.$callInvitations.map { _ in () }, store.$activeRoom.map { _ in () },
+                          store.$joinRequests.map { _ in () })
             .sink { [weak self] in Task { @MainActor [weak self] in self?.refreshIcon() } }
             .store(in: &subscriptions)
         Publishers.Merge(store.$activeRoom.map { _ in () }, rtc.$isMicrophoneEnabled.map { _ in () })
@@ -114,7 +115,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
     }
 
     private func refreshIcon() {
-        let symbol = store.incomingCall != nil ? "phone.arrow.down.left" : (store.activeRoom != nil ? "phone.fill" : "rectangle.on.rectangle")
+        let symbol = !store.incomingCallPrompts.isEmpty ? "phone.arrow.down.left" : (store.activeRoom != nil ? "phone.fill" : "rectangle.on.rectangle")
         item.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "PairDesk")
     }
 

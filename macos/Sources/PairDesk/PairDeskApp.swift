@@ -63,7 +63,7 @@ final class PairDeskDelegate: NSObject, NSApplicationDelegate {
     var store: AppStore { AppRuntime.shared.store }
     private var statusBar: StatusBarController?
     private var subscriptions = Set<AnyCancellable>()
-    private var shownIncomingCallID: String?
+    private var incomingCallPresenter: IncomingCallPresenter?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !isAutomationLaunch {
@@ -116,9 +116,7 @@ final class PairDeskDelegate: NSObject, NSApplicationDelegate {
         store.$activeRoom.map { $0 != nil }.removeDuplicates().sink { inCall in
             NSApp.setActivationPolicy(inCall ? .regular : .accessory)
         }.store(in: &subscriptions)
-        store.$callInvitations.sink { [weak self] _ in
-            Task { @MainActor [weak self] in self?.syncIncomingCallWindow() }
-        }.store(in: &subscriptions)
+        incomingCallPresenter = IncomingCallPresenter(store: store)
         rtc.$activeSharerIdentity.sink { _ in
             Task { @MainActor in
                 if rtc.activeSharerIdentity != nil, !rtc.isSharing, rtc.screenTrack != nil { AppWindows.shared.showSharedScreen(store: store) }
@@ -146,13 +144,6 @@ final class PairDeskDelegate: NSObject, NSApplicationDelegate {
         #else
         return false
         #endif
-    }
-
-    private func syncIncomingCallWindow() {
-        let id = store.incomingCall?.id
-        guard id != shownIncomingCallID else { return }
-        shownIncomingCallID = id
-        if id != nil { AppWindows.shared.showIncomingCall(store: store) } else { AppWindows.shared.close("incoming") }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

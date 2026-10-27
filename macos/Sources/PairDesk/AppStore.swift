@@ -78,8 +78,27 @@ final class AppStore: ObservableObject {
     var incomingCall: CallInvitation? { callInvitations.first { $0.status == "pending" && $0.target.id == user?.id } }
     var outgoingCalls: [CallInvitation] { callInvitations.filter { $0.status == "pending" && $0.caller.id == user?.id } }
     var incomingJoinRequests: [CallJoinRequest] {
-        joinRequests.filter { request in
-            request.status == "pending" && request.room.participants.contains { $0.id == user?.id }
+        guard let user, let activeRoom else { return [] }
+        return joinRequests.filter { request in
+            request.status == "pending" && request.room.id == activeRoom.id &&
+            request.room.participants.contains { $0.id == user.id }
+        }
+    }
+    var incomingCallPrompts: [IncomingCallPrompt] {
+        guard user != nil else { return [] }
+        if activeRoom != nil { return incomingJoinRequests.map(IncomingCallPrompt.joinRequest) }
+        return callInvitations.filter { $0.status == "pending" && $0.target.id == user?.id }
+            .map(IncomingCallPrompt.invitation)
+    }
+
+    func respond(to prompt: IncomingCallPrompt, accepting: Bool) async {
+        guard !busy, incomingCallPrompts.contains(where: { $0.id == prompt.id }) else { return }
+        error = nil
+        switch prompt {
+        case .invitation(let call):
+            if accepting { await acceptCall(call) } else { await declineCall(call) }
+        case .joinRequest(let request):
+            if accepting { await acceptJoinRequest(request) } else { await declineJoinRequest(request) }
         }
     }
     var outgoingJoinRequests: [CallJoinRequest] {
@@ -279,6 +298,8 @@ final class AppStore: ObservableObject {
         users = []
         rooms = []
         callInvitations = []
+        joinRequests = []
+        activeTeamCalls = []
         observedCallStatuses = [:]
         autoVoiceCallID = nil
         if let attentionRequest { NSApp.cancelUserAttentionRequest(attentionRequest); self.attentionRequest = nil }
@@ -352,10 +373,11 @@ final class AppStore: ObservableObject {
             // Direct calls remain available with an older deployed server;
             // team-call discovery appears as soon as its API is upgraded.
             let requestResponseValue: JoinRequestsResponse? = try? await api.request("v1/join-requests")
+            guard user?.id == currentUser.id, pollSequence == invitationPollSequence else { return }
             if let requestResponseValue {
                 joinRequests = requestResponseValue.requests
                 let newIncoming = requestResponseValue.requests.filter { request in
-                    request.status == "pending" && oldJoinStatuses[request.id] != "pending" &&
+                    request.status == "pending" && request.room.id == activeRoom?.id && oldJoinStatuses[request.id] != "pending" &&
                     request.room.participants.contains { $0.id == currentUser.id }
                 }
                 if !newIncoming.isEmpty {
@@ -363,9 +385,6 @@ final class AppStore: ObservableObject {
                         NSApp.cancelUserAttentionRequest(joinAttentionRequest)
                     }
                     joinAttentionRequest = NSApp.requestUserAttention(.criticalRequest)
-                    // The in-app prompt contains call-specific Accept and
-                    // Decline actions and needs no notification permission.
-                    StatusBarController.shared?.showPopover()
                 }
                 if incomingJoinRequests.isEmpty, let joinAttentionRequest {
                     NSApp.cancelUserAttentionRequest(joinAttentionRequest)
@@ -373,6 +392,7 @@ final class AppStore: ObservableObject {
                 }
             }
             let activeCallsValue: ActiveCallsResponse? = try? await api.request("v1/active-calls")
+            guard user?.id == currentUser.id, pollSequence == invitationPollSequence else { return }
             if let activeCallsValue { activeTeamCalls = activeCallsValue.calls }
             observedCallStatuses = Dictionary(uniqueKeysWithValues: response.calls.map { ($0.id, $0.status) })
             if let incoming = incomingCall, oldStatuses[incoming.id] == nil {
@@ -427,24 +447,32 @@ final class AppStore: ObservableObject {
     }
 
     func acceptJoinRequest(_ request: CallJoinRequest) async {
-        guard !busy, activeRoom != nil else { return }
+        guard !busy, activeRoom?.id == request.room.id else { return }
         busy = true
         defer { busy = false }
+        invitationPollSequence += 1
         do {
             struct Empty: Encodable {}
-            let _: CallJoinRequestResponse = try await api.post("v1/join-requests/\(request.id)/accept", body: Empty())
+            let response: CallJoinRequestResponse = try await api.post("v1/join-requests/\(request.id)/accept", body: Empty())
+            joinRequests.removeAll { $0.id == request.id }
+            joinRequests.append(response.request)
             callMessage = "\(request.requester.name) is joining the call."
-            await refreshInvitations()
         } catch { self.error = error.localizedDescription }
+        await refreshInvitations()
     }
 
     func declineJoinRequest(_ request: CallJoinRequest) async {
-        guard !busy else { return }
+        guard !busy, activeRoom?.id == request.room.id else { return }
+        busy = true
+        defer { busy = false }
+        invitationPollSequence += 1
         do {
             struct Empty: Encodable {}
-            let _: CallJoinRequestResponse = try await api.post("v1/join-requests/\(request.id)/decline", body: Empty())
-            await refreshInvitations()
+            let response: CallJoinRequestResponse = try await api.post("v1/join-requests/\(request.id)/decline", body: Empty())
+            joinRequests.removeAll { $0.id == request.id }
+            joinRequests.append(response.request)
         } catch { self.error = error.localizedDescription }
+        await refreshInvitations()
     }
 
     func cancelJoinRequest(_ request: CallJoinRequest) async {
@@ -595,6 +623,10 @@ final class AppStore: ObservableObject {
     }
 
     func leave() async {
+        // Invalidate invitation and join-request polling that began in this room.
+        // Otherwise a delayed response can repopulate prompts after we leave (or
+        // after we quickly rejoin the same room).
+        invitationPollSequence += 1
         transcripts.setEnabled(false)
         transcripts.clear()
         hadRemoteParticipant = false
