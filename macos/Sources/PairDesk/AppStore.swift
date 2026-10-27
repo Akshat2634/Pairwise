@@ -623,6 +623,10 @@ final class AppStore: ObservableObject {
     }
 
     func leave() async {
+        // Invalidate invitation and join-request polling that began in this room.
+        // Otherwise a delayed response can repopulate prompts after we leave (or
+        // after we quickly rejoin the same room).
+        invitationPollSequence += 1
         transcripts.setEnabled(false)
         transcripts.clear()
         hadRemoteParticipant = false

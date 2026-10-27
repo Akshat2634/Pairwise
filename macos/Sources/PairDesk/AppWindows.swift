@@ -78,7 +78,6 @@ final class AppWindows {
     func showIncomingCall(store: AppStore) -> NSWindow {
         let window = show("incoming", activate: false) {
             let controller = NSHostingController(rootView: IncomingCallView(store: store).preferredColorScheme(.dark))
-            controller.sizingOptions = [.preferredContentSize]
             let window = IncomingCallPanel(contentViewController: controller)
             window.title = "Incoming call"
             window.styleMask = [.titled, .fullSizeContentView, .nonactivatingPanel]
@@ -93,9 +92,9 @@ final class AppWindows {
             window.isMovableByWindowBackground = true
             window.level = .floating
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            window.setContentSize(NSSize(width: 348, height: 340))
             return window
         }
-        window.layoutIfNeeded()
         if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
             window.setFrameTopLeftPoint(NSPoint(x: visible.maxX - window.frame.width - 16, y: visible.maxY - 16))
         }
