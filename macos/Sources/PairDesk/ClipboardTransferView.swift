@@ -7,9 +7,7 @@ struct ClipboardPeer: Identifiable, Equatable {
     var id: String { identity }
 }
 
-/// Embeddable in-call clipboard UI. Reading the local pasteboard only happens
-/// after the sender presses Send; writing it only happens after the receiver
-/// presses Copy to clipboard.
+/// Call-level sync consent and explicit, reviewable one-off clipboard offers.
 struct ClipboardTransferView: View {
     let peers: [ClipboardPeer]
     let incoming: (senderName: String, message: ClipboardTransferMessage)?
@@ -44,6 +42,9 @@ struct ClipboardTransferView: View {
                      ? "Each teammate turns this on from their own Copy & paste button. Plain text only; it turns off when the call ends."
                      : "Turn this on here and on each Mac that should share plain text. No images or files.")
                     .font(.caption).foregroundStyle(.secondary)
+                Text("On a shared display: select text and press ⌘C to copy here. Copy locally, click the remote app, then press ⌘V to paste there.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(12)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
@@ -104,7 +105,7 @@ struct ClipboardTransferView: View {
     }
 
     private func sendClipboard() {
-        // This explicit button is the only path that reads the system pasteboard.
+        // One-off offers read only when the sender presses Send.
         guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
             status = "There is no text in the clipboard."
             return

@@ -136,3 +136,15 @@ call content out of this repository.
 | Mac A tester | Pending | Pending | Pending |
 | Mac B tester | Pending | Pending | Pending |
 | Call/operations reviewer | Pending | Pending | Pending |
+
+## Shared-screen clipboard acceptance
+
+Run the [two-Mac clipboard procedure](clipboard-sharing.md#two-mac-acceptance) for each release candidate. Automated tests replace OS shortcuts with a synthetic destination; they do not establish these physical outcomes.
+
+| Scenario | Required result | Status |
+| --- | --- | --- |
+| Local copy → shared-display paste | The selected remote app receives the latest plain text exactly once, including text copied before the call. | Not run |
+| Remote selection → local copy | `⌘C` returns the current remote selection; local `⌘V` pastes it correctly. | Not run |
+| First interaction, Unicode, multiline and near-limit text | A new control grant preserves the clipboard operation and text remains intact. | Not run |
+| Consent, control, Accessibility and lifecycle changes | Opt-out, pause, permission revocation, source change and disconnect prevent delayed clipboard writes or pastes. | Not run |
+| Focus, unsupported clipboard and timeout | Local fields keep their shortcuts; images/files, oversized or unchanged remote copies never paste unrelated stale text. | Not run |

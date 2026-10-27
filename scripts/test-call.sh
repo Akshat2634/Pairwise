@@ -42,6 +42,6 @@ if [ "$ready" -ne 1 ]; then cat "$FIXTURE/api.log" >&2; exit 1; fi
 export PAIRDESK_TEST_PASSWORD
 PAIRDESK_TEST_API=http://127.0.0.1:18081
 export PAIRDESK_TEST_API
-TEST_FILTER=${PAIRDESK_TEST_FILTER:-'CallIntegrationTests|DirectCallIntegrationTests|CallFeedbackIntegrationTests|RemoteMuteIntegrationTests|HostCursorIntegrationTests'}
+TEST_FILTER=${PAIRDESK_TEST_FILTER:-'CallIntegrationTests|DirectCallIntegrationTests|CallFeedbackIntegrationTests|RemoteMuteIntegrationTests|HostCursorIntegrationTests|ScreenClipboardIntegrationTests'}
 (cd macos && swift test -j 4 --filter "$TEST_FILTER")
 echo 'Native call/media integration profiles verified against the selected LiveKit endpoint; synthetic accounts and API cleaned up.'

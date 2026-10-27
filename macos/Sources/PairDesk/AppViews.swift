@@ -259,7 +259,7 @@ struct SharedScreenWindow: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(rtc.clipboardSyncEnabled ? Theme.accent : nil)
-                .help(rtc.clipboardSyncEnabled ? "Text copy and paste is synced with this call until the call ends" : "Sync copy and paste for the call, or send text once to a teammate")
+                .help(rtc.clipboardSyncEnabled ? "Use ⌘C and ⌘V in the shared display to copy and paste text. Enable on both Macs." : "Enable copy and paste on both Macs, or send text once to a teammate")
                 .accessibilityLabel(rtc.clipboardSyncEnabled ? "Copy and paste sync on" : "Copy and paste options")
                 .popover(isPresented: $showClipboard, arrowEdge: .bottom) {
                     ClipboardTransferView(
