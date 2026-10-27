@@ -237,7 +237,10 @@ func (s *Server) pruneJoinRequestsLocked(now time.Time) bool {
 			request.UpdatedAt = now
 			s.store.s.JoinRequests[id] = request
 			changed = true
-		} else if request.Status != "pending" && now.Sub(request.UpdatedAt) > callHistoryTTL {
+		} else if request.Status != "pending" && now.Sub(request.UpdatedAt) > callHistoryTTL &&
+			!(request.Status == "accepted" && activeMemberInRoomLocked(s.store.s, request.RequesterID, request.RoomID, now)) {
+			// An accepted request remains the admission record for a live member,
+			// including groups that outlive the original direct invitation.
 			delete(s.store.s.JoinRequests, id)
 			changed = true
 		}

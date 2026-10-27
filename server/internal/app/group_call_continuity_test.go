@@ -44,6 +44,12 @@ func TestGroupJoinersSurviveOriginalParticipantsLeaving(t *testing.T) {
 			invite := s.store.s.Calls[callID]
 			invite.ExpiresAt = time.Now().Add(-time.Minute)
 			s.store.s.Calls[callID] = invite
+			// History may age out while the media room is still established.
+			// Cleanup must retain accepted admissions until their members leave.
+			for id, admission := range s.store.s.JoinRequests {
+				admission.UpdatedAt = time.Now().Add(-callHistoryTTL - time.Minute)
+				s.store.s.JoinRequests[id] = admission
+			}
 			s.store.unlock()
 			leavingTokens := []string{targetToken}
 			remainingTokens := append([]string{}, joinerTokens...)
@@ -61,6 +67,9 @@ func TestGroupJoinersSurviveOriginalParticipantsLeaving(t *testing.T) {
 			s.store.lock()
 			t.Logf("Remaining joined members before invitation poll: %d", len(s.store.s.Rooms[roomID].Members))
 			s.store.unlock()
+			if w := request(h, "GET", "/v1/join-requests", joinerTokens[0], ""); w.Code != 200 {
+				t.Fatalf("history cleanup: %d %s", w.Code, w.Body)
+			}
 			w := request(h, "GET", "/v1/calls", joinerTokens[0], "")
 			if w.Code != 200 {
 				t.Fatalf("poll: %d %s", w.Code, w.Body)
@@ -81,6 +90,13 @@ func TestGroupJoinersSurviveOriginalParticipantsLeaving(t *testing.T) {
 			request(h, "GET", "/v1/calls", remainingTokens[0], "")
 			if w := request(h, "POST", "/v1/rooms/"+roomID+"/heartbeat", remainingTokens[0], ""); w.Code != 403 {
 				t.Fatalf("lone member should be released: %d %s", w.Code, w.Body)
+			}
+			request(h, "GET", "/v1/join-requests", remainingTokens[0], "")
+			s.store.lock()
+			remainingAdmissions := len(s.store.s.JoinRequests)
+			s.store.unlock()
+			if remainingAdmissions != 0 {
+				t.Fatalf("ended admissions should age out: %d remaining", remainingAdmissions)
 			}
 		})
 	}
