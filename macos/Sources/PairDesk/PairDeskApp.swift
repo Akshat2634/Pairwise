@@ -128,6 +128,7 @@ final class PairDeskDelegate: NSObject, NSApplicationDelegate {
             guard id == nil else { return }
             Task { @MainActor in
                 AppWindows.shared.close("screen")
+                AppWindows.shared.close("camera-gallery")
                 AppWindows.shared.close("share")
                 AppWindows.shared.close("transcript")
             }

@@ -59,6 +59,18 @@ final class AppWindows {
         }
     }
 
+    func showCameraGallery(rtc: RTCService) {
+        show("camera-gallery") {
+            let window = Self.hosted(CameraGalleryView(rtc: rtc), title: "PairDesk · Camera view", fixedSize: false)
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.collectionBehavior.insert(.fullScreenPrimary)
+            window.contentMinSize = NSSize(width: 700, height: 480)
+            window.setContentSize(NSSize(width: 1120, height: 760))
+            window.center()
+            return window
+        }
+    }
+
     /// A notification-style card: top right, above other apps' windows, on
     /// every Space, and shown without activating the app so typing elsewhere
     /// cannot answer the call.

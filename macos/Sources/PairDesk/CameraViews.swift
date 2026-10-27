@@ -20,6 +20,71 @@ struct CameraStrip: View {
     }
 }
 
+struct CameraGalleryView: View {
+    @ObservedObject var rtc: RTCService
+
+    private let columns = [GridItem(.adaptive(minimum: 340), spacing: 16)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Camera view").font(.title2.bold())
+                    Text("Live video from people on this call")
+                        .font(.callout).foregroundStyle(Theme.textMuted)
+                }
+                Spacer()
+                Text("\(rtc.cameraFeeds.count) \(rtc.cameraFeeds.count == 1 ? "camera" : "cameras")")
+                    .font(.callout.monospacedDigit()).foregroundStyle(Theme.textMuted)
+            }
+
+            if rtc.cameraFeeds.isEmpty {
+                ContentUnavailableView("No cameras are on", systemImage: "video.slash",
+                                       description: Text("Turn on a camera from the call controls to show video here."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(rtc.cameraFeeds) { feed in
+                            CameraGalleryCard(feed: feed).id(ObjectIdentifier(feed.track))
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+            }
+        }
+        .padding(22)
+        .background(Theme.surface)
+        .frame(minWidth: 700, minHeight: 480)
+    }
+}
+
+private struct CameraGalleryCard: View {
+    let feed: CameraFeed
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack(alignment: .bottomLeading) {
+                Color.black
+                SwiftUIVideoView(feed.track,
+                                 layoutMode: .fill,
+                                 mirrorMode: feed.isLocal ? .mirror : .off)
+                LinearGradient(colors: [.clear, .black.opacity(0.68)], startPoint: .center, endPoint: .bottom)
+                Label(feed.isLocal ? "\(feed.name) · You" : feed.name,
+                      systemImage: feed.isLocal ? "person.crop.rectangle" : "person.fill")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(12)
+            }
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.1), lineWidth: 1))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Camera from \(feed.name)\(feed.isLocal ? ", you" : "")")
+    }
+}
+
 private struct CameraFeedTile: View {
     let feed: CameraFeed
     @StateObject private var observer: TrackDelegateObserver
