@@ -170,6 +170,9 @@ enum UISnapshots {
         snapshot("window-settings-camera-test", to: directory, size: CGSize(width: 960, height: 660)) {
             SettingsView(store: idle, rtc: idle.rtc, loginItem: loginItem, initialSection: .camera)
         }
+        snapshot("window-camera-gallery-empty", to: directory, size: CGSize(width: 1120, height: 760)) {
+            CameraGalleryView(rtc: inCall.rtc)
+        }
         snapshot("window-clipboard-sharing", to: directory, size: CGSize(width: 520, height: 520)) {
             ClipboardTransferView(
                 peers: [ClipboardPeer(identity: "harshit", name: "Harshit"), ClipboardPeer(identity: "bharat", name: "Bharat")],

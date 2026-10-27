@@ -254,6 +254,14 @@ struct SharedScreenWindow: View {
                     .help("Choose camera")
                     .accessibilityLabel("Choose camera")
                 }
+                if !rtc.cameraFeeds.isEmpty {
+                    Button { AppWindows.shared.showCameraGallery(rtc: rtc) } label: {
+                        Image(systemName: "rectangle.expand.vertical")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Open the large camera view")
+                    .accessibilityLabel("Open camera view")
+                }
                 Button { showClipboard = true } label: {
                     Label("Copy & paste", systemImage: rtc.clipboardSyncEnabled ? "doc.on.clipboard.fill" : "doc.on.clipboard")
                 }
