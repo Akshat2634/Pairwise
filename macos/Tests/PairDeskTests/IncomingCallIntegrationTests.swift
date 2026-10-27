@@ -132,12 +132,13 @@ struct IncomingCallIntegrationTests {
             await host.refreshInvitations()
             try await settle { !hostWindows.isShown("incoming") }
 
-            await requester.requestToJoin(room)
             await other.requestToJoin(room)
+            await requester.requestToJoin(room)
             await host.refreshInvitations()
             await peer.refreshInvitations()
             #expect(host.incomingCallPrompts.count == 2)
-            let accepted = try #require(peer.incomingCallPrompts.first { $0.person.id == requester.user?.id })
+            let accepted = try #require(peer.incomingCallPrompts.first)
+            #expect(accepted.person.id == requester.user?.id, "Respond to the request actually displayed by the popup")
             await peer.respond(to: accepted, accepting: true)
             #expect(peer.error == nil)
             await requester.refreshInvitations()
