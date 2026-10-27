@@ -45,6 +45,7 @@ final class LocalAgentBridge: ObservableObject {
     @Published private(set) var socketPath = ""
     @Published private(set) var credential: String?
     @Published private(set) var screenshotActivity: String?
+    @Published private(set) var hasActiveCall = false
 
     private let state: AgentBridgeState
     private let endpoint: URL
@@ -71,6 +72,7 @@ final class LocalAgentBridge: ObservableObject {
             revoke(reason: "call-ended")
             self.callID = callID
         }
+        hasActiveCall = callID != nil
         state.update(callID: callID, participants: participants, transcript: transcript)
     }
 

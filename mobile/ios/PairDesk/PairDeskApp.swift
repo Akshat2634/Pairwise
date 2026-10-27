@@ -30,8 +30,8 @@ struct RootView: View {
         }
         .tint(.indigo)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-            guard model.user != nil else { return }
-            PairDeskAppDelegate.requestNotificationAuthorizationAfterAuthentication()
+            if model.user != nil { PairDeskAppDelegate.requestNotificationAuthorizationAfterAuthentication() }
+            else if model.hasSavedSession { Task { await model.restore() } }
         }
         .alert("PairDesk", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("OK") { model.error = nil }
@@ -46,6 +46,12 @@ struct LoginView: View {
             Section("Your team server") {
                 TextField("https://pairdesk.example.com", text: Binding(get: { model.server }, set: { model.server = $0 }))
                     .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
+            }
+            if model.hasSavedSession {
+                Section {
+                    Button("Retry saved sign-in") { Task { await model.restore() } }.disabled(model.busy)
+                    Text("Your saved session is kept while the server is unreachable.").font(.footnote)
+                }
             }
             Section("Sign in") {
                 TextField("Email", text: Binding(get: { model.email }, set: { model.email = $0 }))
@@ -100,6 +106,14 @@ struct TeamView: View {
                                 Button("Decline", role: .destructive) { Task { await model.respond(request, accept: false) } }.buttonStyle(.bordered)
                             }
                         }.padding(.vertical, 4)
+                    }
+                }
+            }
+            if !model.approvedJoinRequests.isEmpty {
+                Section("Join approved") {
+                    ForEach(model.approvedJoinRequests) { request in
+                        Button("Retry joining \(request.room.name)") { Task { await model.retryApprovedJoinRequest(request) } }
+                            .disabled(model.busy)
                     }
                 }
             }

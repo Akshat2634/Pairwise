@@ -17,6 +17,8 @@ struct CameraTile: Identifiable {
     @ObservationIgnored private var speakerOverrideActive = false
     private(set) var connected = false
     private(set) var videoTiles: [CameraTile] = []
+    var onDisconnected: (() -> Void)?
+    @ObservationIgnored private var hadRemoteParticipant = false
 
     override init() { super.init() }
 
@@ -26,14 +28,18 @@ struct CameraTile: Identifiable {
         self.room = room
         do {
             try await room.connect(url: url, token: token)
+            guard self.room === room else { throw CancellationError() }
             connected = true
+            hadRemoteParticipant = !room.remoteParticipants.isEmpty
             if startMicrophone {
                 try await room.localParticipant.setMicrophone(enabled: true)
+                guard self.room === room else { throw CancellationError() }
                 microphoneOn = true
             }
             refreshVideoTiles()
         } catch {
-            await leave()
+            if self.room === room { await leave() }
+            else { await room.disconnect() }
             throw error
         }
     }
@@ -83,8 +89,41 @@ struct CameraTile: Identifiable {
     func leave() async {
         if speakerOverrideActive { try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none) }
         speakerOverrideActive = false
-        if let room { await room.disconnect() }
+        let previous = room
         room = nil; connected = false; microphoneOn = false; cameraOn = false; speakerOn = false; videoTiles = []
+        hadRemoteParticipant = false
+        // Clear identity before awaiting disconnect so intentional teardown
+        // cannot be mistaken for a remote hang-up by delayed delegate events.
+        if let previous { await previous.disconnect() }
+    }
+
+    nonisolated func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room else { return }
+            await self.leave()
+            guard self.room == nil else { return }
+            self.onDisconnected?()
+        }
+    }
+
+    nonisolated func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room else { return }
+            self.hadRemoteParticipant = true
+            self.refreshVideoTiles()
+        }
+    }
+
+    nonisolated func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
+        Task { @MainActor [weak self] in
+            guard let self, self.room === room else { return }
+            self.refreshVideoTiles()
+            if self.hadRemoteParticipant, room.remoteParticipants.isEmpty {
+                await self.leave()
+                guard self.room == nil else { return }
+                self.onDisconnected?()
+            }
+        }
     }
 
     nonisolated func room(_ room: Room, participant: LocalParticipant, didPublishTrack publication: LocalTrackPublication) {

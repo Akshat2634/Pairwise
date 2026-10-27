@@ -7,6 +7,8 @@ Native SwiftUI companion for teammates who need to see presence, answer or place
 - Team roster and foreground availability toggle.
 - Direct calls, accept/decline, active group call listing, join requests, and accept/decline prompts.
 - LiveKit voice, mute, speaker routing, and optional camera video. Microphone turns on after joining; camera remains off until explicitly enabled and then uses the iOS camera permission prompt.
+- Locally requested join approvals connect once, defer while another action is busy, and offer an explicit retry on a failed connection. Leaving does not replay accepted history. Remote media disconnects, the final peer leaving, and terminal room-heartbeat responses clear the active call.
+- Saved sign-in survives offline or server errors, with **Retry saved sign-in** on the login screen. Only an authentication rejection (HTTP 401) discards the saved token.
 - No mobile screen capture, screen sharing, remote control, account creation, SSO, or recording.
 
 ## Build
@@ -18,6 +20,8 @@ xcodebuild -project mobile/ios/PairDesk.xcodeproj -scheme PairDesk -sdk iphonesi
 ```
 
 Install on a device through Xcode with a locally selected development team. App Store/TestFlight or broad device distribution requires an Apple Developer Program account and signing setup.
+
+Run `sh scripts/test-ios-model.sh` from the repository root to exercise the production app model and API with fixture media/notification adapters and HTTP responses. This checks approval, hang-up, and session recovery state without activating Keychain or device capture. CI also builds the actual iOS simulator app; audio, CallKit, and permission behavior still require physical-device verification.
 
 ## Existing server contract
 

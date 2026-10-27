@@ -155,4 +155,57 @@ struct IncomingCallIntegrationTests {
             try await settle { !hostWindows.isShown("incoming") && !peerWindows.isShown("incoming") }
         }
     }
+
+    @Test @MainActor
+    func testApprovalWhileBusyConnectsAfterwardsAndDoesNotRejoinAfterLeaving() async throws {
+        try await withClients { clients in
+            let host = clients[0], peer = clients[1], requester = clients[2]
+            await host.call(try #require(host.users.first { $0.id == peer.user?.id }))
+            await peer.refreshInvitations()
+            await peer.acceptCall(try #require(peer.incomingCall))
+            let room = try #require(host.activeRoom)
+            await requester.requestToJoin(room)
+            requester.busy = true
+            await peer.refreshInvitations()
+            await peer.acceptJoinRequest(try #require(peer.incomingJoinRequests.first))
+            await requester.refreshInvitations()
+            #expect(requester.activeRoom == nil)
+            requester.busy = false
+            try await settle { requester.activeRoom?.id == room.id }
+            #expect(requester.rtc.connected)
+            await requester.leave()
+            await requester.refreshInvitations()
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(requester.activeRoom == nil)
+            #expect(!requester.rtc.connected)
+        }
+    }
+
+    @Test @MainActor
+    func testJoinedParticipantsKeepTheCallWhenBothOriginalParticipantsLeave() async throws {
+        try await withClients { clients in
+            let host = clients[0], peer = clients[1]
+            await host.call(try #require(host.users.first { $0.id == peer.user?.id }))
+            await peer.refreshInvitations()
+            await peer.acceptCall(try #require(peer.incomingCall))
+            let room = try #require(host.activeRoom)
+            for requester in clients.suffix(2) {
+                await requester.requestToJoin(room)
+                await host.refreshInvitations()
+                await host.acceptJoinRequest(try #require(host.incomingJoinRequests.first))
+                await requester.refreshInvitations()
+                try await settle { requester.activeRoom?.id == room.id }
+            }
+            try await settle { clients[2].rtc.participants.count == 4 && clients[3].rtc.participants.count == 4 }
+            await host.leave()
+            await peer.leave()
+            for remaining in clients.suffix(2) {
+                await remaining.refreshInvitations()
+                await remaining.refresh()
+                #expect(remaining.activeRoom?.id == room.id)
+                #expect(remaining.rtc.connected)
+            }
+            try await settle { clients[2].rtc.participants.count == 2 && clients[3].rtc.participants.count == 2 }
+        }
+    }
 }

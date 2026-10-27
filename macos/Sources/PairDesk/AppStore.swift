@@ -3,6 +3,7 @@ import Foundation
 import Combine
 import ApplicationServices
 import SwiftUI
+import PairwiseCore
 
 enum ServerAddressPolicy {
     struct InitialAddress {
@@ -43,7 +44,11 @@ final class AppStore: ObservableObject {
     @Published var callMessage: String? { didSet { scheduleCallMessageExpiry() } }
     @Published var activeRoom: PairRoom? { didSet { updateCallAudio() } }
     @Published var callStartedAt: Date?
-    @Published var busy = false
+    @Published var busy = false {
+        didSet {
+            if !busy { Task { @MainActor [weak self] in await self?.connectApprovedJoinRequest() } }
+        }
+    }
     @Published var error: String?
     @Published var directoryStatus = "Connecting…"
     @Published var serverAddress: String
@@ -72,6 +77,7 @@ final class AppStore: ObservableObject {
     private var joinAttentionRequest: Int?
     private var autoVoiceCallID: String?
     private var invitationPollSequence = 0
+    @Published private var joinApprovals = JoinApprovalTracker()
     private let callAudio: CallAudioFeedback
     private var mediaCallConnected = false
 
@@ -103,6 +109,13 @@ final class AppStore: ObservableObject {
     }
     var outgoingJoinRequests: [CallJoinRequest] {
         joinRequests.filter { $0.status == "pending" && $0.requester.id == user?.id }
+    }
+    var approvedJoinRequests: [CallJoinRequest] {
+        guard activeRoom == nil, let user else { return [] }
+        return joinRequests.filter {
+            $0.status == "accepted" && $0.requester.id == user.id && joinApprovals.isAwaitingConnection($0.id) &&
+            $0.room.participants.contains(where: { $0.id == user.id })
+        }
     }
     var canAddPerson: Bool { activeRoom != nil && rtc.participants.count + outgoingCalls.count < 4 }
     var availablePeople: [TeamUser] {
@@ -147,7 +160,7 @@ final class AppStore: ObservableObject {
         }.store(in: &subscriptions)
         rtc.$participants.sink { [weak self] participants in
             guard let self else { return }
-            self.updateAgentBridge()
+            self.updateAgentBridge(participants: participants)
             if participants.contains(where: { !$0.isLocal }) {
                 self.hadRemoteParticipant = true
                 // Private rooms admit the target only after acceptance, so a
@@ -159,8 +172,9 @@ final class AppStore: ObservableObject {
                 Task { await self.leave() }
             }
         }.store(in: &subscriptions)
-        $activeRoom.combineLatest(transcripts.$segments).sink { [weak self] _, _ in
-            self?.updateAgentBridge()
+        $activeRoom.combineLatest(transcripts.$segments).sink { [weak self] room, segments in
+            guard let self else { return }
+            self.updateAgentBridge(room: room, participants: self.rtc.participants, segments: segments)
         }.store(in: &subscriptions)
         rtc.onAudioBuffer = { [weak self] identity, name, samples, rate in
             Task { @MainActor in
@@ -170,15 +184,19 @@ final class AppStore: ObservableObject {
         }
     }
 
-    private func updateAgentBridge() {
-        let participants = rtc.participants.map { person in
+    private func updateAgentBridge(participants: [CallParticipant]) {
+        updateAgentBridge(room: activeRoom, participants: participants, segments: transcripts.segments)
+    }
+
+    private func updateAgentBridge(room: PairRoom?, participants: [CallParticipant], segments: [TranscriptSegment]) {
+        let participants = participants.map { person in
             ["name": person.name]
         }
-        let transcript = transcripts.segments.suffix(40).map { segment in
+        let transcript = segments.suffix(40).map { segment in
             ["speaker": String(segment.speakerName.prefix(120)), "text": String(segment.text.prefix(600)),
              "time": ISO8601DateFormatter().string(from: segment.createdAt)]
         }
-        agentBridge.update(callID: activeRoom?.id, participants: participants, transcript: transcript)
+        agentBridge.update(callID: room?.id, participants: participants, transcript: transcript)
     }
 
     private func updateCallAudio() {
@@ -402,7 +420,7 @@ final class AppStore: ObservableObject {
                 NSApp.cancelUserAttentionRequest(attentionRequest)
                 self.attentionRequest = nil
             }
-            if let activeRoom, !busy {
+            if let activeRoom, !busy, !rtc.participants.contains(where: { !$0.isLocal }) {
                 let links = response.calls.filter { $0.room.id == activeRoom.id }
                 if !links.isEmpty && links.allSatisfy({ ["cancelled", "declined", "expired"].contains($0.status) }) {
                     callMessage = "Call ended."
@@ -419,16 +437,7 @@ final class AppStore: ObservableObject {
                     if activeRoom?.id == invitation.room.id, rtc.participants.count <= 1, outgoingCalls.isEmpty { await leave() }
                 }
             }
-            if activeRoom == nil, !busy,
-               let accepted = requestResponseValue?.requests.first(where: {
-                   $0.requester.id == currentUser.id && $0.status == "accepted" && oldJoinStatuses[$0.id] == "pending"
-               }) {
-                await joinInternal(accepted.room)
-                if activeRoom != nil && !startCallsMuted {
-                    do { try await rtc.setMicrophoneEnabled(true) }
-                    catch { self.error = error.localizedDescription }
-                }
-            }
+            await connectApprovedJoinRequest()
         } catch {
             // Directory heartbeat handles authentication/server errors. Polling resumes on the next tick.
         }
@@ -440,7 +449,11 @@ final class AppStore: ObservableObject {
         defer { busy = false }
         do {
             struct Empty: Encodable {}
-            let _: CallJoinRequestResponse = try await api.post("v1/rooms/\(room.id)/join-requests", body: Empty())
+            let response: CallJoinRequestResponse = try await api.post("v1/rooms/\(room.id)/join-requests", body: Empty())
+            joinApprovals.clear()
+            joinApprovals.requestCreated(response.request.id)
+            joinRequests.removeAll { $0.id == response.request.id }
+            joinRequests.append(response.request)
             callMessage = "Join request sent to everyone in the call."
             await refreshInvitations()
         } catch { self.error = error.localizedDescription }
@@ -480,8 +493,32 @@ final class AppStore: ObservableObject {
         do {
             struct Empty: Encodable {}
             let _: CallJoinRequestResponse = try await api.post("v1/join-requests/\(request.id)/cancel", body: Empty())
+            joinApprovals.clear()
             await refreshInvitations()
         } catch { self.error = error.localizedDescription }
+    }
+
+    func retryApprovedJoinRequest(_ request: CallJoinRequest) async {
+        await connectApprovedJoinRequest(retrying: request.id)
+    }
+
+    private func connectApprovedJoinRequest(retrying id: String? = nil) async {
+        guard !busy, activeRoom == nil,
+              let request = approvedJoinRequests.first(where: { request in
+                  if let id { return request.id == id }
+                  return joinApprovals.shouldAutomaticallyJoin(request.id)
+              }) else { return }
+        busy = true
+        defer { busy = false }
+        joinApprovals.beginAttempt(request.id)
+        await joinInternal(request.room, releaseOnFailure: false)
+        if activeRoom?.id == request.room.id {
+            joinApprovals.didJoin(request.id)
+            if !startCallsMuted {
+                do { try await rtc.setMicrophoneEnabled(true) }
+                catch { self.error = error.localizedDescription }
+            }
+        }
     }
 
     func call(_ person: TeamUser) async {
@@ -587,12 +624,12 @@ final class AppStore: ObservableObject {
         await joinInternal(room)
     }
 
-    private func joinInternal(_ room: PairRoom) async {
+    private func joinInternal(_ room: PairRoom, releaseOnFailure: Bool = true) async {
         error = nil
         callMessage = nil
         generation += 1
         let attempt = generation
-        await leave()
+        await leave(cancelJoinApprovals: false)
         guard let user else { return }
         do {
             let join: JoinResponse = try await api.post("v1/rooms/\(room.id)/join", body: EmptyBody())
@@ -607,7 +644,7 @@ final class AppStore: ObservableObject {
             Task { await self.refresh() }
         } catch {
             await rtc.disconnect()
-            try? await api.send("v1/rooms/\(room.id)/leave", body: EmptyBody())
+            if releaseOnFailure { try? await api.send("v1/rooms/\(room.id)/leave", body: EmptyBody()) }
             self.error = error.localizedDescription
         }
     }
@@ -622,7 +659,8 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func leave() async {
+    func leave(cancelJoinApprovals: Bool = true) async {
+        if cancelJoinApprovals { joinApprovals.clear() }
         // Invalidate invitation and join-request polling that began in this room.
         // Otherwise a delayed response can repopulate prompts after we leave (or
         // after we quickly rejoin the same room).

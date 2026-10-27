@@ -5,6 +5,23 @@ import CoreAudio
 import SwiftUI
 
 @MainActor
+final class SettingsMediaTests {
+    let microphone = MicrophoneTestController()
+    let camera = CameraPreviewTestController()
+    private(set) var generation = 0
+    func stop() { generation += 1; microphone.stop(); camera.stop() }
+}
+
+/// Cached AppKit windows do not disappear from SwiftUI when closed/ordered out.
+/// End tests at the actual window boundary, before hiding their controls.
+@MainActor
+final class MediaTestWindow: NSWindow {
+    var stopMediaTests: (() -> Void)?
+    override func close() { stopMediaTests?(); super.close() }
+    override func orderOut(_ sender: Any?) { stopMediaTests?(); super.orderOut(sender) }
+}
+
+@MainActor
 final class MicrophoneTestController: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var level = 0.0

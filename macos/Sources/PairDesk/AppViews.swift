@@ -556,6 +556,7 @@ private struct TranscriptPanel: View {
     @State private var allowParticipants = false
     @State private var allowTranscript = false
     @State private var allowScreenshot = false
+    @State private var agentAccessError: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack { Text("Local transcript").font(.system(size: 14, weight: .semibold)); Spacer(); Image(systemName: "lock").font(.system(size: 11)).foregroundStyle(Theme.accent) }
@@ -597,11 +598,14 @@ private struct TranscriptPanel: View {
                 Button("Revoke agent access") { bridge.revoke() }.buttonStyle(.plain).foregroundStyle(.red)
             } else {
                 Button("Enable local agent access") {
-                    _ = bridge.authorize(capabilities: Set([allowParticipants ? "participants" : nil,
+                    agentAccessError = nil
+                    let token = bridge.authorize(capabilities: Set([allowParticipants ? "participants" : nil,
                                                             allowTranscript ? "transcript" : nil,
                                                             allowScreenshot ? "screenshot" : nil].compactMap { $0 }))
-                }.buttonStyle(.borderedProminent).disabled(!allowParticipants && !allowTranscript && !allowScreenshot)
+                    if token == nil { agentAccessError = "Agent access could not be enabled for this call. Try again." }
+                }.buttonStyle(.borderedProminent).disabled(!bridge.hasActiveCall || (!allowParticipants && !allowTranscript && !allowScreenshot))
             }
+            if let agentAccessError { Text(agentAccessError).font(.caption).foregroundStyle(Theme.attention) }
             if !bridge.isEnabled && (!allowParticipants || !allowTranscript || !allowScreenshot) {
                 Text("Each capability is optional. Audio, screen streams, and remote control are not exposed.")
                     .font(.system(size: 9)).foregroundStyle(Theme.textMuted).fixedSize(horizontal: false, vertical: true)

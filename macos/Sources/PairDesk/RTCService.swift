@@ -444,7 +444,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                   let track = publication.track as? LocalVideoTrack,
                   let capturer = track.capturer as? CameraCapturer else { return }
             do {
-                _ = try await capturer.set(options: CameraCaptureOptions(device: device))
+                _ = try await capturer.set(options: cameraCaptureOptions(device: device))
             } catch {
                 cameraDeviceNotice = "Couldn't switch camera. The current camera remains active."
                 return
@@ -492,6 +492,11 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         } catch {
             cameraDeviceNotice = "Couldn't load camera devices. Voice and screen sharing are still available."
         }
+    }
+
+    func cameraCaptureOptions(device: AVCaptureDevice? = nil) -> CameraCaptureOptions {
+        CameraCaptureOptions(device: device, dimensions: cameraVideoQuality.dimensions,
+                             fps: cameraVideoQuality.framesPerSecond)
     }
 
     func selectAudioInput(_ deviceID: String) {

@@ -67,6 +67,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Test iOS call and session recovery model
+        run: sh scripts/test-ios-model.sh
       - name: Build iOS simulator app without signing
         run: >-
           xcodebuild -quiet
@@ -114,6 +116,8 @@ jobs:
         with:
           go-version: '1.25.6'
           cache-dependency-path: server/go.sum
+      - name: Shared approval state tests
+        run: swift test --package-path shared -j 4
       - name: Native macOS tests
         working-directory: macos
         run: swift test -j 4

@@ -9,10 +9,14 @@ let package = Package(
         .executable(name: "pairdesk-agent-mcp", targets: ["PairDeskAgentMCP"])
     ],
     dependencies: [
+        .package(path: "../shared"),
         .package(path: "../vendor/livekit-client-swift")
     ],
     targets: [
-        .executableTarget(name: "PairDesk", dependencies: [.product(name: "LiveKit", package: "livekit-client-swift")]),
+        .executableTarget(name: "PairDesk", dependencies: [
+            .product(name: "LiveKit", package: "livekit-client-swift"),
+            .product(name: "PairwiseCore", package: "shared")
+        ]),
         .executableTarget(name: "PairDeskAgentMCP"),
         .testTarget(name: "PairDeskTests", dependencies: ["PairDesk"])
     ],

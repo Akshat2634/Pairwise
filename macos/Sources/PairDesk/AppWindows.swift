@@ -26,8 +26,9 @@ final class AppWindows {
 
     func showSettings(store: AppStore, loginItem: LoginItemManager) {
         show("settings") {
-            let window = Self.hosted(SettingsView(store: store, rtc: store.rtc, loginItem: loginItem),
-                                     title: "PairDesk Settings", fixedSize: false)
+            let mediaTests = SettingsMediaTests()
+            let window = Self.hosted(SettingsView(store: store, rtc: store.rtc, loginItem: loginItem, mediaTests: mediaTests),
+                                     title: "PairDesk Settings", fixedSize: false, onHide: { mediaTests.stop() })
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.contentMinSize = NSSize(width: 850, height: 580)
             window.setContentSize(NSSize(width: 960, height: 660))
@@ -117,12 +118,18 @@ final class AppWindows {
         return window
     }
 
-    private static func hosted<Root: View>(_ root: Root, title: String, fixedSize: Bool = true) -> NSWindow {
+    private static func hosted<Root: View>(_ root: Root, title: String, fixedSize: Bool = true,
+                                         onHide: (() -> Void)? = nil) -> NSWindow {
         let controller = NSHostingController(rootView: root.preferredColorScheme(.dark))
         // Fixed-size windows follow their content; the viewer is sized once
         // and then belongs to the person resizing it.
         controller.sizingOptions = fixedSize ? [.preferredContentSize] : []
-        let window = NSWindow(contentViewController: controller)
+        let window: NSWindow
+        if let onHide {
+            let mediaWindow = MediaTestWindow(contentViewController: controller)
+            mediaWindow.stopMediaTests = onHide
+            window = mediaWindow
+        } else { window = NSWindow(contentViewController: controller) }
         window.title = title
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false

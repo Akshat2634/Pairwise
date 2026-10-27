@@ -34,8 +34,12 @@ enum ScreenCropGeometry {
                       height: clipped.height / contentRect.height)
     }
 
-    static func sourceRect(normalizedCrop: CGRect, displaySize: CGSize) -> CGRect? {
-        guard displaySize.width > 0, displaySize.height > 0,
+    static func sourceRect(normalizedCrop: CGRect?, displaySize: CGSize) -> CGRect? {
+        guard displaySize.width > 0, displaySize.height > 0 else { return nil }
+        // Successful nil selection means the whole display. Cancel is a
+        // separate throwing result from the crop window.
+        guard let normalizedCrop else { return .zero }
+        guard
               normalizedCrop.minX >= 0, normalizedCrop.minY >= 0,
               normalizedCrop.maxX <= 1, normalizedCrop.maxY <= 1,
               normalizedCrop.width > 0, normalizedCrop.height > 0 else { return nil }
@@ -182,7 +186,6 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
         configuration.showsCursor = false
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
         let normalized = try await chooseCrop(for: NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)))
-        guard let normalized else { throw CocoaError(.userCancelled) }
         let displaySize = CGSize(width: filter.contentRect.width, height: filter.contentRect.height)
         guard let sourceRect = ScreenCropGeometry.sourceRect(normalizedCrop: normalized, displaySize: displaySize) else {
             throw CocoaError(.validationMissingMandatoryProperty)
@@ -268,7 +271,13 @@ final class SystemScreenPicker: NSObject, @preconcurrency SCContentSharingPicker
                                            applicationName: application.applicationName,
                                            title: window.title ?? "")
         }.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
-        let selection = try await choosePrivacyVeilApplications(apps, windows: windowChoices)
+        let selection: PrivacyVeilSelectionResult
+        if preferences.reviewBeforeSharing {
+            selection = try await choosePrivacyVeilApplications(apps, windows: windowChoices)
+        } else {
+            selection = PrivacyVeilSelectionResult(
+                applications: apps.filter { preferences.bundleIdentifiers.contains($0.bundleIdentifier) }, windowIDs: [])
+        }
         var excludedApplications = selection.applications
         if preferences.hideNotificationBanners {
             let availableIDs = Set(apps.map(\.bundleIdentifier))

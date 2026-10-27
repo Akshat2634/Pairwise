@@ -1,6 +1,18 @@
 import Foundation
 import Observation
 import Security
+import PairwiseCore
+
+struct SessionCredentialStore {
+    let read: () -> String?
+    let write: (String) -> Void
+    let clear: () -> Void
+    static var keychain: Self {
+        Self(read: { Keychain.read("pairdesk.session") },
+             write: { Keychain.write($0, key: "pairdesk.session") },
+             clear: { Keychain.delete("pairdesk.session") })
+    }
+}
 
 @MainActor @Observable final class AppModel {
     static let shared = AppModel()
@@ -15,17 +27,48 @@ import Security
     private(set) var activeRoom: PairRoom?
     private(set) var available = true
     var error: String?
-    var busy = false
-    let call = CallSession()
+    var busy = false {
+        didSet {
+            if !busy { Task { @MainActor [weak self] in await self?.connectApprovedJoinRequest() } }
+        }
+    }
+    let call: CallSession
+    @ObservationIgnored private let credentials: SessionCredentialStore
+    @ObservationIgnored private let apiSession: URLSession
     @ObservationIgnored private var token: String?
     @ObservationIgnored var pushRegistrationAPI: (any PushRegistrationAPI)?
     @ObservationIgnored private var alertPushToken: Data?
     @ObservationIgnored private var voipPushToken: Data?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var roomTask: Task<Void, Never>?
+    private var joinApprovals = JoinApprovalTracker()
+    private var restoringSession = false
+    private var leavingCall = false
 
-    init() { token = Keychain.read("pairdesk.session"); if token != nil { Task { await restore() } } }
-    private var api: APIClient { get throws { try APIClient(server: server, token: token) } }
+    init(credentials: SessionCredentialStore = .keychain, session: URLSession = .shared,
+         call: CallSession? = nil, restoreOnLaunch: Bool = true) {
+        self.credentials = credentials
+        self.apiSession = session
+        self.call = call ?? CallSession()
+        token = credentials.read()
+        self.call.onDisconnected = { [weak self] in
+            guard let self, let roomID = self.activeRoom?.id else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.activeRoom?.id == roomID, !self.call.connected else { return }
+                await self.leaveCall()
+            }
+        }
+        if restoreOnLaunch, token != nil { Task { await restore() } }
+    }
+    var hasSavedSession: Bool { token != nil }
+    var approvedJoinRequests: [CallJoinRequest] {
+        guard activeRoom == nil, let user else { return [] }
+        return joinRequests.filter {
+            $0.status == "accepted" && $0.requester.id == user.id && joinApprovals.isAwaitingConnection($0.id) &&
+            $0.room.participants.contains(where: { $0.id == user.id })
+        }
+    }
+    private var api: APIClient { get throws { try APIClient(server: server, token: token, session: apiSession) } }
     var incoming: [CallInvitation] { calls.filter { $0.target.id == user?.id && $0.status == "pending" } }
     var outgoing: [CallInvitation] { calls.filter { $0.caller.id == user?.id && $0.status == "pending" } }
     var pendingJoinRequests: [CallJoinRequest] { joinRequests.filter { $0.status == "pending" && $0.requester.id != user?.id } }
@@ -36,17 +79,22 @@ import Security
         defer { busy = false }
         struct Body: Encodable { let email: String; let password: String }
         do {
-            let client = try APIClient(server: server)
+            let client = try APIClient(server: server, session: apiSession)
             let result: LoginResponse = try await client.post("v1/login", body: Body(email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password))
-            token = result.token; user = result.user; Keychain.write(result.token, key: "pairdesk.session")
+            token = result.token; user = result.user; credentials.write(result.token)
             PairDeskAppDelegate.requestNotificationAuthorizationAfterAuthentication()
-            pushRegistrationAPI = PairDeskDeviceRegistration(client: try APIClient(server: server, token: result.token), deviceID: DeviceInstallation.id)
+            pushRegistrationAPI = PairDeskDeviceRegistration(client: try APIClient(server: server, token: result.token, session: apiSession), deviceID: DeviceInstallation.id)
             await registerPushTokensIfReady()
             UserDefaults.standard.set(server, forKey: "pairdesk.server")
             password = ""; startPolling()
         } catch { self.error = error.localizedDescription }
     }
-    private func restore() async {
+    func restore() async {
+        guard user == nil, token != nil, !restoringSession else { return }
+        restoringSession = true
+        busy = true
+        error = nil
+        defer { restoringSession = false; busy = false }
         do {
             let me: MeResponse = try await api.get("v1/me")
             user = me.user
@@ -55,7 +103,13 @@ import Security
             await registerPushTokensIfReady()
             startPolling()
         }
-        catch { token = nil; Keychain.delete("pairdesk.session") }
+        catch {
+            if (error as? APIError)?.status == 401 {
+                token = nil
+                credentials.clear()
+            }
+            self.error = error.localizedDescription
+        }
     }
     func logout() async {
         refreshTask?.cancel(); roomTask?.cancel()
@@ -65,7 +119,7 @@ import Security
         struct LogoutBody: Encodable { let deviceId: String }
         try? await api.send("v1/logout", body: LogoutBody(deviceId: DeviceInstallation.id))
         token = nil; user = nil; teammates = []; calls = []; activeCalls = []; joinRequests = []
-        Keychain.delete("pairdesk.session")
+        credentials.clear()
     }
     private func startPolling() {
         refreshTask?.cancel()
@@ -105,12 +159,8 @@ import Security
             let (p, c, j, a) = try await (people, allCalls, requests, active)
             teammates = p.users; calls = c.calls; joinRequests = j.requests; activeCalls = a.calls
             PairDeskAppDelegate.reconcileIncomingCalls(with: c.calls, activeRoomID: activeRoom?.id)
-            if activeRoom == nil, let accepted = j.requests.first(where: {
-                $0.requester.id == user?.id && $0.status == "accepted"
-            }) { await join(accepted.room); return }
-            if let current = activeRoom {
-                try? await api.send("v1/rooms/\(current.id)/heartbeat", body: EmptyBody())
-            }
+            await connectApprovedJoinRequest()
+            if let current = activeRoom { await heartbeat(current) }
         } catch { self.error = error.localizedDescription }
     }
     func call(_ person: TeamUser) async {
@@ -155,8 +205,40 @@ import Security
         } catch { self.error = error.localizedDescription }
     }
     func requestJoin(_ room: PairRoom) async {
-        do { let _: JoinRequestResponse = try await api.post("v1/rooms/\(room.id)/join-requests", body: EmptyBody()); await refresh() }
-        catch { self.error = error.localizedDescription }
+        guard !busy, activeRoom == nil else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let response: JoinRequestResponse = try await api.post("v1/rooms/\(room.id)/join-requests", body: EmptyBody())
+            joinApprovals.clear()
+            joinApprovals.requestCreated(response.request.id)
+            await refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+    func retryApprovedJoinRequest(_ request: CallJoinRequest) async {
+        await connectApprovedJoinRequest(retrying: request.id)
+    }
+    private func connectApprovedJoinRequest(retrying id: String? = nil) async {
+        guard !busy, activeRoom == nil,
+              let request = approvedJoinRequests.first(where: { request in
+                  if let id { return request.id == id }
+                  return joinApprovals.shouldAutomaticallyJoin(request.id)
+              }) else { return }
+        busy = true
+        defer { busy = false }
+        joinApprovals.beginAttempt(request.id)
+        do {
+            try await joinRoom(request.room)
+            joinApprovals.didJoin(request.id)
+        } catch { self.error = error.localizedDescription }
+    }
+    private func heartbeat(_ room: PairRoom) async {
+        do { try await api.send("v1/rooms/\(room.id)/heartbeat", body: EmptyBody()) }
+        catch {
+            if activeRoom?.id == room.id, let status = (error as? APIError)?.status,
+               [403, 404, 409].contains(status) { await leaveCall() }
+            else { self.error = error.localizedDescription }
+        }
     }
     func respond(_ request: CallJoinRequest, accept: Bool) async {
         do {
@@ -178,11 +260,15 @@ import Security
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(10))
                 guard let self, let room = self.activeRoom else { break }
-                try? await self.api.send("v1/rooms/\(room.id)/heartbeat", body: EmptyBody())
+                await self.heartbeat(room)
             }
         }
     }
     func leaveCall() async {
+        guard !leavingCall else { return }
+        leavingCall = true
+        defer { leavingCall = false }
+        joinApprovals.clear()
         roomTask?.cancel(); roomTask = nil
         let room = activeRoom; activeRoom = nil
         PairDeskAppDelegate.reportActiveCallsEnded()

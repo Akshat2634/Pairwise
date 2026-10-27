@@ -16,9 +16,13 @@ final class PrivacyVeilPreferences: ObservableObject {
     static let shared = PrivacyVeilPreferences()
     static let defaultsKey = "privacyVeilHiddenApplications"
     static let hideNotificationsDefaultsKey = "privacyVeilHideNotificationBanners"
+    static let reviewDefaultsKey = "privacyVeilReviewBeforeSharing"
     nonisolated static let notificationCenterBundleIdentifiers: Set<String> = ["com.apple.notificationcenterui"]
 
     @Published private(set) var applications: [HiddenApplication]
+    @Published var reviewBeforeSharing: Bool {
+        didSet { defaults.set(reviewBeforeSharing, forKey: Self.reviewDefaultsKey) }
+    }
     @Published var hideNotificationBanners: Bool {
         didSet { defaults.set(hideNotificationBanners, forKey: Self.hideNotificationsDefaultsKey) }
     }
@@ -26,6 +30,7 @@ final class PrivacyVeilPreferences: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        reviewBeforeSharing = defaults.bool(forKey: Self.reviewDefaultsKey)
         if let data = defaults.data(forKey: Self.defaultsKey),
            let stored = try? JSONDecoder().decode([HiddenApplication].self, from: data) {
             applications = Self.unique(stored)
