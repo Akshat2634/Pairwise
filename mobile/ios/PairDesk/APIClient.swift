@@ -11,7 +11,8 @@ protocol PushRegistrationAPI: Sendable {
 struct APIClient {
     let baseURL: URL
     let token: String?
-    init(server: String, token: String? = nil) throws {
+    var session: URLSession = .shared
+    init(server: String, token: String? = nil, session: URLSession = .shared) throws {
         guard let url = URL(string: server.trimmingCharacters(in: .whitespacesAndNewlines)),
               let scheme = url.scheme?.lowercased(), let host = url.host,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
@@ -19,7 +20,7 @@ struct APIClient {
               scheme == "https" || (scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(host)) else {
             throw APIError(message: "Enter an HTTPS server address. HTTP is allowed only for a local development server.")
         }
-        self.baseURL = url; self.token = token
+        self.baseURL = url; self.token = token; self.session = session
     }
     func get<T: Decodable>(_ path: String) async throws -> T { try await request(path, method: "GET", body: nil) }
     func post<T: Decodable, B: Encodable>(_ path: String, body: B) async throws -> T {
@@ -40,11 +41,11 @@ struct APIClient {
         var req = URLRequest(url: baseURL.appending(path: path), timeoutInterval: 15)
         req.httpMethod = method; req.httpBody = body; req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw APIError(message: "No response from PairDesk server.") }
         guard (200..<300).contains(http.statusCode) else {
             let error = (try? JSONDecoder().decode(ServerError.self, from: data).error) ?? "Request failed (\(http.statusCode))."
-            throw APIError(message: error)
+            throw APIError(message: error, status: http.statusCode)
         }
         return (data, http)
     }

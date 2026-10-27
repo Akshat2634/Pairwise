@@ -28,15 +28,20 @@ struct SettingsView: View {
     @ObservedObject var loginItem: LoginItemManager
     @ObservedObject private var permissions = PermissionManager.shared
     @ObservedObject private var privacyVeil = PrivacyVeilPreferences.shared
-    @StateObject private var microphoneTest = MicrophoneTestController()
-    @StateObject private var cameraTest = CameraPreviewTestController()
+    @StateObject private var microphoneTest: MicrophoneTestController
+    @StateObject private var cameraTest: CameraPreviewTestController
+    private let mediaTests: SettingsMediaTests
     @State private var selection: PairDeskSettingsSection?
 
     init(store: AppStore, rtc: RTCService, loginItem: LoginItemManager,
-         initialSection: PairDeskSettingsSection = .general) {
+         initialSection: PairDeskSettingsSection = .general, mediaTests: SettingsMediaTests? = nil) {
         self.store = store
         self.rtc = rtc
         self.loginItem = loginItem
+        let mediaTests = mediaTests ?? SettingsMediaTests()
+        self.mediaTests = mediaTests
+        _microphoneTest = StateObject(wrappedValue: mediaTests.microphone)
+        _cameraTest = StateObject(wrappedValue: mediaTests.camera)
         _selection = State(initialValue: initialSection)
     }
 
@@ -75,13 +80,12 @@ struct SettingsView: View {
             Task { await rtc.refreshCameraDevices() }
         }
         .onDisappear {
-            microphoneTest.stop()
-            cameraTest.stop()
+            mediaTests.stop()
         }
+        .onChange(of: selection) { _, _ in mediaTests.stop() }
         .onChange(of: store.activeRoom?.id) { _, roomID in
             guard roomID != nil else { return }
-            microphoneTest.stop()
-            cameraTest.stop()
+            mediaTests.stop()
         }
         .onChange(of: rtc.isCameraEnabled) { _, enabled in
             if enabled { cameraTest.stop() }
@@ -238,6 +242,13 @@ struct SettingsView: View {
                 }
             }
             SettingsCard {
+                Toggle("Review privacy choices before each share", isOn: $privacyVeil.reviewBeforeSharing)
+                Text("Saved hidden-app and notification preferences are applied automatically. Enable review to customize apps or hide individual windows for a share.")
+                    .font(.callout).foregroundStyle(Theme.textMuted)
+                Button("Edit hidden apps and notification settings…") { selection = .privacy }
+                    .buttonStyle(QuietButtonStyle())
+            }
+            SettingsCard {
                 Label("Source selection", systemImage: "rectangle.dashed")
                     .font(.headline)
                 Text("Choose a display, window, or region when you start sharing. Window shares show only that selected window and are view-only.")
@@ -326,10 +337,11 @@ struct SettingsView: View {
             return
         }
         guard permissions.microphone else {
+            let generation = mediaTests.generation
             Task {
                 await permissions.requestMicrophone()
                 permissions.refresh()
-                if permissions.microphone { microphoneTest.start(deviceID: rtc.selectedAudioInputID) }
+                if permissions.microphone, mediaTests.generation == generation { microphoneTest.start(deviceID: rtc.selectedAudioInputID) }
             }
             return
         }
@@ -342,10 +354,11 @@ struct SettingsView: View {
             return
         }
         guard permissions.camera else {
+            let generation = mediaTests.generation
             Task {
                 await permissions.requestCamera()
                 permissions.refresh()
-                if permissions.camera { cameraTest.start(cameraID: rtc.selectedCameraID) }
+                if permissions.camera, mediaTests.generation == generation { cameraTest.start(cameraID: rtc.selectedCameraID) }
             }
             return
         }

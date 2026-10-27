@@ -2,6 +2,8 @@
 
 This native Kotlin/Compose app uses the existing PairDesk API and LiveKit room-token flow. It supports email/password sign-in, a custom API URL, encrypted local session storage, foreground roster/presence, an availability toggle, direct calls, incoming-call accept/decline, active-call join requests, voice mute, speaker routing, and opt-in camera publishing. It does not share a mobile screen or control a Mac.
 
+Microphone permission is obtained before placing or accepting a call. A grant resumes the pending action once; denial leaves the invitation unanswered so it can be retried. If the invitation expires while permission is being requested, the API rejection is shown. Saved sign-in survives offline and server failures and offers **Retry saved sign-in**; only HTTP 401 removes the stored token.
+
 ## Build
 
 Install JDK 17 and Android SDK platform 35, then run:

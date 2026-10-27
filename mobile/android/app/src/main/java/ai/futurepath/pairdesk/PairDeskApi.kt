@@ -36,7 +36,7 @@ class PairDeskApi(base: String) : PushDeviceRegistrar {
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 val message = runCatching { JSONObject(text).optString("error") }.getOrNull().orEmpty()
-                throw IllegalStateException(message.ifBlank { "PairDesk server returned HTTP ${response.code}" })
+                throw PairDeskApiException(response.code, message.ifBlank { "PairDesk server returned HTTP ${response.code}" })
             }
             if (text.isBlank()) JSONObject() else JSONObject(text)
         }

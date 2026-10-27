@@ -26,5 +26,10 @@ struct CallInvitation: Decodable, Identifiable, Equatable {
 struct CallJoinRequest: Decodable, Identifiable, Equatable {
     let id: String; let status: String; let requester: TeamUser; let room: PairRoom; let expiresAt: String
 }
-struct APIError: LocalizedError { let message: String; var errorDescription: String? { message } }
+struct APIError: LocalizedError {
+    let message: String
+    let status: Int?
+    init(message: String, status: Int? = nil) { self.message = message; self.status = status }
+    var errorDescription: String? { message }
+}
 struct EmptyBody: Encodable {}

@@ -16,6 +16,14 @@ struct MenuBarPanel: View {
                 Button("Sign in") { show("main") }.buttonStyle(PrimaryButtonStyle()).disabled(store.busy)
             } else {
                 statusRow
+                ForEach(store.approvedJoinRequests) { request in
+                    HStack {
+                        Text("Your request to join \(callNames(request.room)) was approved.").font(.caption)
+                        Spacer()
+                        Button("Retry joining") { Task { await store.retryApprovedJoinRequest(request) } }
+                            .buttonStyle(PrimaryButtonStyle()).disabled(store.busy)
+                    }
+                }
                 if let incoming = store.incomingCall { incomingCall(incoming) }
                 if store.activeRoom != nil {
                     inCall

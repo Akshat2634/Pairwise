@@ -382,6 +382,15 @@ func hasActiveCallInRoomLocked(state State, roomID string, now time.Time) bool {
 			return true
 		}
 	}
+	// Approved joiners can keep an established group alive after the original
+	// caller/target leave. A lone member still needs a pending seat to wait for.
+	if liveMemberCountLocked(state, roomID, now) >= 2 || pendingCallSeatsLocked(state, roomID, now) > 0 {
+		for _, request := range state.JoinRequests {
+			if request.RoomID == roomID && request.Status == "accepted" && activeMemberInRoomLocked(state, request.RequesterID, roomID, now) {
+				return true
+			}
+		}
+	}
 	return false
 }
 

@@ -67,10 +67,9 @@ private fun PairDeskApp() {
     var speakerOn by remember { mutableStateOf(true) }
     var available by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
+    var hasSavedSession by remember { mutableStateOf(prefs.getString("token", null) != null) }
+    val callPermissionGate = remember { CallPermissionGate() }
 
-    val audioPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (!granted) error = "Microphone permission is needed to join a voice call."
-    }
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) scope.launch {
             runCatching { liveRoom?.localParticipant?.setCameraEnabled(true) }
@@ -113,13 +112,13 @@ private fun PairDeskApp() {
     suspend fun connectToRoom(id: String) {
         val service = api ?: return
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
-            return
+            throw IllegalStateException("Microphone permission is needed to join a voice call.")
         }
-        busy = true
+        var connecting: Room? = null
         try {
             val grant = service.joinRoom(id)
             val room = LiveKit.create(context)
+            connecting = room
             room.connect(grant.url, grant.token)
             room.localParticipant.setMicrophoneEnabled(true)
             liveRoom = room
@@ -127,8 +126,61 @@ private fun PairDeskApp() {
             muted = false
             message = "Connected to ${grant.room.name}"
         } catch (t: Throwable) {
+            runCatching { connecting?.disconnect() }
             runCatching { service.leaveRoom(id) }
             error = t.message ?: "Could not join the call."
+        }
+    }
+
+    suspend fun performCallAction(action: PendingCallAction) {
+        val service = api
+        if (service == null) { busy = false; return }
+        busy = true
+        error = ""
+        try {
+            when (action) {
+                is PendingCallAction.Place -> {
+                    val invitation = service.startCall(action.userId)
+                    message = "Calling ${invitation.target.name}…"
+                    connectToRoom(invitation.room.id)
+                }
+                is PendingCallAction.Answer -> {
+                    service.callAction(action.invitationId, "accept")
+                    connectToRoom(action.roomId)
+                }
+                is PendingCallAction.Join -> connectToRoom(action.roomId)
+            }
+        } catch (t: Exception) { error = t.message ?: "Could not connect the call." }
+        finally { busy = false }
+        refresh()
+    }
+
+    val audioPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val action = callPermissionGate.resolve(granted)
+        busy = action != null
+        if (action != null) scope.launch { performCallAction(action) }
+        else if (!granted) error = "Microphone permission is needed to join a voice call."
+    }
+
+    fun requestCallAction(action: PendingCallAction) {
+        if (busy) return
+        val granted = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (callPermissionGate.request(action, granted)) { busy = true; scope.launch { performCallAction(action) } }
+        else { busy = true; audioPermission.launch(Manifest.permission.RECORD_AUDIO) }
+    }
+
+    suspend fun restoreSavedSignIn() {
+        val token = prefs.getString("token", null) ?: return
+        if (server.isBlank() || busy) return
+        busy = true
+        error = ""
+        val restored = PairDeskApi(server).apply { bearer = token }
+        try {
+            restoreAuthenticatedSession(load = { restored.me() }, clearSavedToken = {
+                prefs.edit().remove("token").apply()
+                hasSavedSession = false
+            }).onSuccess { me = it; api = restored }
+                .onFailure { error = it.message ?: "Could not restore your session. Check your connection and retry." }
         } finally { busy = false }
     }
 
@@ -144,18 +196,16 @@ private fun PairDeskApp() {
         }
     }
 
-    LaunchedEffect(Unit) {
-        val token = prefs.getString("token", null)
-        if (token != null && server.isNotBlank()) {
-            val restored = PairDeskApi(server).apply { bearer = token }
-            runCatching { me = restored.me(); api = restored }.onFailure { prefs.edit().remove("token").apply() }
-        }
-    }
+    LaunchedEffect(Unit) { restoreSavedSignIn() }
 
     if (me == null) {
         Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("PairDesk", style = MaterialTheme.typography.headlineMedium)
             Text("Sign in to call your team from mobile.")
+            if (hasSavedSession) {
+                OutlinedButton(enabled = !busy, onClick = { scope.launch { restoreSavedSignIn() } }) { Text("Retry saved sign-in") }
+                Text("Your saved session is kept while the server is unreachable.", style = MaterialTheme.typography.bodySmall)
+            }
             OutlinedTextField(server, { server = it }, label = { Text("PairDesk server URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(email, { email = it }, label = { Text("Email") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(password, { password = it }, label = { Text("Password") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -167,6 +217,7 @@ private fun PairDeskApp() {
                     api = service
                     prefs.edit().putString("server", server.trim()).putString("email", email.trim()).putString("token", service.bearer).apply()
                     password = ""
+                    hasSavedSession = true
                 }.onFailure { error = it.message ?: "Sign in failed." }
                 busy = false
             } }) { Text(if (busy) "Signing in…" else "Sign in") }
@@ -209,14 +260,14 @@ private fun PairDeskApp() {
             items(roster.filter { it.id != me?.id }, key = { it.id }) { person ->
                 Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(Modifier.weight(1f)) { Text(person.name); Text(when { person.busy -> "In a call"; person.online -> "Online"; else -> "Offline" }, style = MaterialTheme.typography.bodySmall) }
-            Button(enabled = person.online && !person.busy && roomId == null && !busy, onClick = { scope.launch { runCatching { val invitation = api?.startCall(person.id) ?: throw IllegalStateException("Not signed in"); message = "Calling ${person.name}…"; connectToRoom(invitation.room.id) }.onFailure { error = it.message.orEmpty() }; refresh() } }) { Text("Call") }
+            Button(enabled = person.online && !person.busy && roomId == null && !busy, onClick = { requestCallAction(PendingCallAction.Place(person.id)) }) { Text("Call") }
                 } }
             }
             if (calls.any { it.status == "pending" && it.target.id == me?.id }) item { Text("INCOMING CALLS", style = MaterialTheme.typography.titleMedium) }
             items(calls.filter { it.status == "pending" && it.target.id == me?.id }, key = { "call-${it.id}" }) { invitation ->
                 Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("${invitation.caller.name} is calling", Modifier.weight(1f))
-                    Button(onClick = { scope.launch { runCatching { api?.callAction(invitation.id, "accept"); connectToRoom(invitation.room.id) }.onFailure { error = it.message.orEmpty() } } }) { Text("Answer") }
+                    Button(enabled = !busy, onClick = { requestCallAction(PendingCallAction.Answer(invitation.id, invitation.room.id)) }) { Text("Answer") }
                     TextButton(onClick = { scope.launch { runCatching { api?.callAction(invitation.id, "decline") }; refresh() } }) { Text("Decline") }
                 } }
             }
@@ -232,7 +283,7 @@ private fun PairDeskApp() {
             items(requests.filter { it.status == "accepted" && it.requester.id == me?.id }, key = { "approved-${it.id}" }) { request ->
                 Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Your request to join ${request.room.name} was approved", Modifier.weight(1f))
-                    Button(enabled = roomId == null && !busy, onClick = { scope.launch { connectToRoom(request.room.id) } }) { Text("Join") }
+                    Button(enabled = roomId == null && !busy, onClick = { requestCallAction(PendingCallAction.Join(request.room.id)) }) { Text("Join") }
                 } }
             }
             if (activeCalls.isNotEmpty()) item { Text("ACTIVE CALLS", style = MaterialTheme.typography.titleMedium) }
@@ -248,7 +299,7 @@ private fun PairDeskApp() {
                 runCatching { roomId?.let { api?.leaveRoom(it) } }
                 runCatching { liveRoom?.disconnect() }
                 runCatching { api?.logout(deviceId) }
-                api = null; me = null; roomId = null; liveRoom = null; prefs.edit().remove("token").apply()
+                api = null; me = null; roomId = null; liveRoom = null; hasSavedSession = false; prefs.edit().remove("token").apply()
             } }) { Text("Sign out") } }
         }
     }
