@@ -503,24 +503,43 @@ struct MenuBarPanel: View {
 struct IncomingCallView: View {
     @ObservedObject var store: AppStore
     var body: some View {
-        let caller = store.incomingCall?.caller
-        VStack(spacing: 18) {
-            PersonAvatar(name: caller?.name ?? "?", id: caller?.id ?? "", size: 72, circular: true, ring: true).padding(.top, 6)
-            VStack(spacing: 4) {
-                Text("Incoming call…").font(.caption).foregroundStyle(Theme.textMuted)
-                Text(caller?.name ?? "Your teammate").font(.system(size: 18, weight: .semibold))
-                if let email = caller?.email { Text(email).font(.caption).foregroundStyle(Theme.textMuted) }
+        if let prompt = store.incomingCallPrompts.first {
+            VStack(spacing: 18) {
+                PersonAvatar(name: prompt.person.name, id: prompt.person.id, size: 72, circular: true, ring: true)
+                    .padding(.top, 6).accessibilityHidden(true)
+                VStack(spacing: 4) {
+                    Text(prompt.isJoinRequest ? "Wants to join your call" : "Incoming call…")
+                        .font(.caption).foregroundStyle(Theme.textMuted)
+                    Text(prompt.person.name).font(.system(size: 18, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(prompt.person.email).font(.caption).foregroundStyle(Theme.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }.multilineTextAlignment(.center)
+                HStack(spacing: 12) {
+                    Button { Task { await store.respond(to: prompt, accepting: false) } } label: {
+                        Label("Decline", systemImage: "phone.down.fill").frame(maxWidth: .infinity)
+                    }.buttonStyle(DangerButtonStyle(filled: true))
+                    Button { Task { await store.respond(to: prompt, accepting: true) } } label: {
+                        Label(prompt.isJoinRequest ? "Add to call" : "Accept",
+                              systemImage: prompt.isJoinRequest ? "person.badge.plus" : "phone.fill")
+                            .frame(maxWidth: .infinity)
+                    }.buttonStyle(PrimaryButtonStyle())
+                        .disabled(prompt.isJoinRequest && !store.canAddPerson)
+                }.disabled(store.busy)
+                if prompt.isJoinRequest && !store.canAddPerson {
+                    Text("This call is limited to four people.").font(.caption).foregroundStyle(Theme.textMuted)
+                }
+                if store.incomingCallPrompts.count > 1 {
+                    Text("\(store.incomingCallPrompts.count - 1) more waiting")
+                        .font(.caption).foregroundStyle(Theme.textMuted)
+                }
+                if let error = store.error {
+                    Text(error).font(.caption).foregroundStyle(Theme.attention)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            HStack(spacing: 12) {
-                Button { if let call = store.incomingCall { Task { await store.declineCall(call) } } } label: {
-                    Label("Decline", systemImage: "phone.down.fill").frame(maxWidth: .infinity)
-                }.buttonStyle(DangerButtonStyle(filled: true))
-                Button { if let call = store.incomingCall { Task { await store.acceptCall(call) } } } label: {
-                    Label("Accept", systemImage: "phone.fill").frame(maxWidth: .infinity)
-                }.buttonStyle(PrimaryButtonStyle())
-            }.disabled(store.busy || store.incomingCall == nil)
+            .padding(24).frame(width: 300)
+            .background(Theme.surface)
         }
-        .padding(24).frame(width: 300)
-        .background(Theme.surface)
     }
 }

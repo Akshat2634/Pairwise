@@ -74,10 +74,17 @@ final class AppWindows {
     /// A notification-style card: top right, above other apps' windows, on
     /// every Space, and shown without activating the app so typing elsewhere
     /// cannot answer the call.
-    func showIncomingCall(store: AppStore) {
+    @discardableResult
+    func showIncomingCall(store: AppStore) -> NSWindow {
         let window = show("incoming", activate: false) {
-            let window = Self.hosted(IncomingCallView(store: store), title: "Incoming call")
-            window.styleMask = [.titled, .fullSizeContentView]
+            let controller = NSHostingController(rootView: IncomingCallView(store: store).preferredColorScheme(.dark))
+            controller.sizingOptions = [.preferredContentSize]
+            let window = IncomingCallPanel(contentViewController: controller)
+            window.title = "Incoming call"
+            window.styleMask = [.titled, .fullSizeContentView, .nonactivatingPanel]
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.hidesOnDeactivate = false
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
@@ -92,6 +99,7 @@ final class AppWindows {
         if let visible = (window.screen ?? NSScreen.main)?.visibleFrame {
             window.setFrameTopLeftPoint(NSPoint(x: visible.maxX - window.frame.width - 16, y: visible.maxY - 16))
         }
+        return window
     }
 
     @discardableResult
@@ -123,4 +131,11 @@ final class AppWindows {
         window.center()
         return window
     }
+}
+
+/// Can take keyboard focus when deliberately clicked, but ordering it front
+/// never activates PairDesk or steals keystrokes from the current application.
+private final class IncomingCallPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }

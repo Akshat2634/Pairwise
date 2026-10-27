@@ -155,6 +155,7 @@ enum UISnapshots {
         }
         snapshot("menu-in-call-clipboard-sync", to: directory, compact: true) { MenuBarPanel(store: syncing, rtc: syncing.rtc, loginItem: loginItem) }
         snapshot("window-incoming-call", to: directory) { IncomingCallView(store: incoming) }
+        snapshot("window-incoming-join-request", to: directory) { IncomingCallView(store: joinRequestCall) }
         snapshot("window-sign-in", to: directory) { RootView(store: signedOut).environmentObject(loginItem) }
         snapshot("window-sign-up", to: directory) { LoginView(store: signedOut, creatingAccount: true) }
         snapshot("window-signed-in", to: directory) { RootView(store: idle).environmentObject(loginItem) }
