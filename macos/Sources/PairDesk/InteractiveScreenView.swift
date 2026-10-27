@@ -37,6 +37,7 @@ final class ScreenCanvas: NSView {
     private var firstFrameStartedAt: TimeInterval?
     private static let transparentCursor = NSCursor(image: NSImage(size: NSSize(width: 16, height: 16)), hotSpot: .zero)
     private var tracking: NSTrackingArea?
+    private var clipboardShortcutKeys = Set<UInt16>()
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     init(rtc: RTCService) {
@@ -140,14 +141,20 @@ final class ScreenCanvas: NSView {
     override func keyDown(with event: NSEvent) {
         guard let rtc else { return }
         if event.keyCode == 53 && event.modifierFlags.contains([.control, .option]) { rtc.emergencyStop(); return }
+        if driving, ScreenClipboard.shortcut(code: event.keyCode, modifiers: event.modifierFlags) {
+            clipboardShortcutKeys.insert(event.keyCode)
+            if !event.isARepeat { rtc.sendScreenClipboardShortcut(code: event.keyCode) }
+            return
+        }
         rtc.sendKey(code: event.keyCode, down: true, modifiers: UInt64(event.modifierFlags.rawValue))
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard driving, event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
+        guard driving, window?.firstResponder === self, event.type == .keyDown else { return super.performKeyEquivalent(with: event) }
         keyDown(with: event)
         return true
     }
     override func keyUp(with event: NSEvent) {
+        if clipboardShortcutKeys.remove(event.keyCode) != nil { return }
         guard rtc != nil else { return }
         rtc?.sendKey(code: event.keyCode, down: false, modifiers: UInt64(event.modifierFlags.rawValue))
     }
@@ -165,6 +172,7 @@ final class ScreenCanvas: NSView {
         rtc?.sendKey(code: event.keyCode, down: event.modifierFlags.contains(flag), modifiers: UInt64(event.modifierFlags.rawValue))
     }
     override func resignFirstResponder() -> Bool {
+        clipboardShortcutKeys.removeAll()
         if driving { rtc?.releaseHeldInputs() }
         stopCursorPresence()
         return true

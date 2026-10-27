@@ -1,7 +1,6 @@
 import Foundation
 
-/// A direct, user-initiated text clipboard offer. It is deliberately not a
-/// clipboard monitor or a general pasteboard synchronization protocol.
+/// A bounded text clip used by explicit offers, opt-in sync, and screen control.
 ///
 /// LiveKit delivers reliable data in packets of at most 15 KiB, so one clip is
 /// sent as one or more parts that share an id; the receiver reassembles them.
@@ -9,12 +8,13 @@ struct ClipboardTransferMessage: Codable, Equatable {
     static let version = 1
     /// The whole clip, across all parts.
     static let maximumTextBytes = 64 * 1024
-    /// Text per part. JSON escaping can double it, and the packet must stay
+    /// Text per part. JSON escaping can expand control characters sixfold; the packet must stay
     /// under `maximumWireBytes` with the envelope.
     static let maximumPartTextBytes = 6 * 1024
+    static let maximumPartEscapedBytes = 12 * 1024
     /// LiveKit's documented reliable packet ceiling.
     static let maximumWireBytes = 15_000
-    static let maximumParts = 12
+    static let maximumParts = 33
     static let lifetime: TimeInterval = 120
 
     let version: Int
@@ -56,23 +56,31 @@ struct ClipboardTransferMessage: Codable, Equatable {
         }
     }
 
-    /// Cuts at character boundaries so no part ends inside a grapheme. A single
-    /// character larger than the limit becomes its own part; `encoded()` still
-    /// enforces the wire size.
+    /// Cut at Unicode scalar boundaries. A grapheme can be arbitrarily large
+    /// (combining marks), but joining the parts still reconstructs it exactly.
     static func split(_ text: String, maximumBytes: Int) -> [Substring] {
         var result: [Substring] = []
         var start = text.startIndex
         while start < text.endIndex {
             var end = start
             var bytes = 0
+            var escapedBytes = 0
             while end < text.endIndex {
-                let next = text.index(after: end)
+                let next = text.unicodeScalars.index(after: end)
                 let size = text.utf8.distance(from: end, to: next)
-                if bytes + size > maximumBytes { break }
+                let scalar = text.unicodeScalars[end].value
+                let escapedSize: Int
+                switch scalar {
+                case 8, 9, 10, 12, 13, 34, 47, 92: escapedSize = 2
+                case 0..<32: escapedSize = 6
+                default: escapedSize = size
+                }
+                if bytes + size > maximumBytes || escapedBytes + escapedSize > maximumPartEscapedBytes { break }
                 bytes += size
+                escapedBytes += escapedSize
                 end = next
             }
-            if end == start { end = text.index(after: start) }
+            if end == start { end = text.unicodeScalars.index(after: start) }
             result.append(text[start..<end])
             start = end
         }
@@ -85,19 +93,24 @@ struct ClipboardTransferMessage: Codable, Equatable {
         let message: ClipboardTransferMessage
         do { message = try JSONDecoder().decode(Self.self, from: data) }
         catch { throw ClipboardTransferError.malformedMessage }
-        guard message.version == version else { throw ClipboardTransferError.unsupportedVersion }
+        try message.validate(authenticatedSender: authenticatedSender, localIdentity: localIdentity, now: now)
+        return message
+    }
+
+    func validate(authenticatedSender: String, localIdentity: String, now: Date = .now) throws {
+        let message = self
+        guard message.version == Self.version else { throw ClipboardTransferError.unsupportedVersion }
         guard !authenticatedSender.isEmpty, authenticatedSender != localIdentity else {
             throw ClipboardTransferError.invalidSender
         }
         guard message.recipientIdentity == localIdentity else { throw ClipboardTransferError.wrongRecipient }
-        guard (1...maximumParts).contains(message.parts), (0..<message.parts).contains(message.part),
+        guard (1...Self.maximumParts).contains(message.parts), (0..<message.parts).contains(message.part),
               !message.text.isEmpty else { throw ClipboardTransferError.malformedMessage }
-        guard message.text.utf8.count <= maximumTextBytes else { throw ClipboardTransferError.textTooLarge }
+        guard message.text.utf8.count <= Self.maximumTextBytes else { throw ClipboardTransferError.textTooLarge }
         guard message.createdAt <= now.addingTimeInterval(5),
-              now.timeIntervalSince(message.createdAt) <= lifetime else {
+              now.timeIntervalSince(message.createdAt) <= Self.lifetime else {
             throw ClipboardTransferError.expired
         }
-        return message
     }
 
     func encoded() throws -> Data {
