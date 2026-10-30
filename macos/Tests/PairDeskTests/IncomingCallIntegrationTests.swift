@@ -20,7 +20,7 @@ struct IncomingCallIntegrationTests {
         var clients: [APIClient] = []
         for i in 1...2 {
             let login: LoginResponse = try await unsigned.post("v1/login", body: LoginBody(
-                email: "integration-notification-\(i)@pairdesk.invalid", password: password))
+                email: "integration-\(i)@pairdesk.invalid", password: password))
             logins.append(login)
             clients.append(try APIClient(server: address, token: login.token))
         }
@@ -77,15 +77,23 @@ struct IncomingCallIntegrationTests {
                 #expect(viewer.activeRoom?.id == created.room.id)
             }
             withExtendedLifetime(presenter) {}
-        } catch {
+            // Release the server's share claim and membership while the host
+            // is still connected; cleanup errors must not leave a busy fixture.
+            try await clients[0].send("v1/rooms/\(created.room.id)/share", body: ShareBody(enabled: false))
             await viewer.leave()
+            try await clients[0].send("v1/rooms/\(created.room.id)/leave", body: EmptyBody())
             await host.disconnect()
+            let roster: UsersResponse = try await clients[0].request("v1/users")
+            for login in logins {
+                #expect(roster.users.first(where: { $0.id == login.user.id })?.busy != true)
+            }
+        } catch {
+            try? await clients[0].send("v1/rooms/\(created.room.id)/share", body: ShareBody(enabled: false))
+            await viewer.leave()
             try? await clients[0].send("v1/rooms/\(created.room.id)/leave", body: EmptyBody())
+            await host.disconnect()
             throw error
         }
-        await viewer.leave()
-        await host.disconnect()
-        try? await clients[0].send("v1/rooms/\(created.room.id)/leave", body: EmptyBody())
     }
 
     @MainActor
