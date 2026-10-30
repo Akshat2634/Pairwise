@@ -178,6 +178,9 @@ enum UISnapshots {
         snapshot("window-settings-audio-test", to: directory, size: CGSize(width: 960, height: 660)) {
             SettingsView(store: idle, rtc: idle.rtc, loginItem: loginItem, initialSection: .audio)
         }
+        snapshot("window-settings-audio-in-call", to: directory, size: CGSize(width: 960, height: 660)) {
+            SettingsView(store: inCall, rtc: inCall.rtc, loginItem: loginItem, initialSection: .audio)
+        }
         snapshot("window-settings-screen-share", to: directory, size: CGSize(width: 960, height: 660)) {
             SettingsView(store: idle, rtc: idle.rtc, loginItem: loginItem, initialSection: .screenShare)
         }

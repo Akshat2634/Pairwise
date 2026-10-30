@@ -547,7 +547,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         audioOutputDevices = Self.audioDeviceChoices(AudioManager.shared.outputDevices)
     }
 
-    private func refreshAudioDevices(using manager: AudioManager = .shared) {
+    func refreshAudioDevices(using manager: AudioManager = .shared) {
         let inputs = manager.inputDevices
         let outputs = manager.outputDevices
         let inputResolution = SavedAudioDeviceSelection.resolve(
@@ -575,8 +575,10 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         savedAudioOutputUnavailable = outputResolution.savedDeviceUnavailable
         audioInputDevices = Self.audioDeviceChoices(inputs)
         audioOutputDevices = Self.audioDeviceChoices(outputs)
-        selectedAudioInputID = manager.inputDevice.deviceId
-        selectedAudioOutputID = manager.outputDevice.deviceId
+        // The SDK can report an empty active ID before its audio engine has
+        // started, even when its default route is available in the device list.
+        selectedAudioInputID = inputResolution.selectedDeviceID
+        selectedAudioOutputID = outputResolution.selectedDeviceID
     }
 
     private static func audioDeviceChoices(_ devices: [AudioDevice]) -> [AudioDeviceChoice] {
