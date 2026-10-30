@@ -15,11 +15,19 @@ struct CallHistoryTests {
         return try JSONDecoder().decode(CallInvitation.self, from: JSONSerialization.data(withJSONObject: call))
     }
 
-    @Test(arguments: ["2026-10-29T10:00:00Z", "2026-10-29T10:00:00.123456789Z", "2026-10-29T15:30:00+05:30"])
-    func realServerTimestampsNeverBecomeYearOne(_ timestamp: String) throws {
+    @Test(arguments: [("2026-10-29T10:00:00Z", 0.0),
+                      ("2026-10-29T10:00:00.1Z", 0.1),
+                      ("2026-10-29T10:00:00.123Z", 0.123),
+                      ("2026-10-29T10:00:00.123456Z", 0.123456),
+                      ("2026-10-29T10:00:00.123456789Z", 0.123456789),
+                      ("2026-10-29T15:30:00+05:30", 0.0),
+                      ("2026-10-29T04:30:00-05:30", 0.0),
+                      ("2026-10-29T15:30:00.123456789+05:30", 0.123456789)])
+    func realServerTimestampsPreserveSecondsAndOffsets(_ timestamp: String, _ fraction: Double) throws {
         let call = try invitation(createdAt: timestamp)
-        let parsed = try #require(call.createdDate as Date?)
-        #expect(Calendar(identifier: .gregorian).component(.year, from: parsed) == 2026)
+        let parsed = try #require(call.createdDate)
+        let wholeSecond = try #require(ISO8601DateFormatter().date(from: "2026-10-29T10:00:00Z"))
+        #expect(abs(parsed.timeIntervalSince(wholeSecond) - fraction) < 0.000001)
     }
 
     @Test(arguments: [nil, "", "not-a-date"] as [String?])

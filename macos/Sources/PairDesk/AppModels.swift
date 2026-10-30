@@ -49,7 +49,10 @@ struct APIError: LocalizedError {
 enum ServerDate {
     static func parse(_ value: String?) -> Date? {
         guard let value else { return nil }
-        return try? Date(value, strategy: .iso8601)
+        // Before Swift 6.2, parsing requires fractional seconds to match the
+        // format style exactly. Accept both forms on every supported macOS.
+        return (try? Date(value, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+            ?? (try? Date(value, strategy: .iso8601))
     }
 }
 
