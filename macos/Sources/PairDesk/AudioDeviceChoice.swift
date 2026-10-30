@@ -6,7 +6,11 @@ struct AudioDeviceChoice: Identifiable, Equatable {
     let name: String
     let isDefault: Bool
 
-    var title: String { isDefault ? "System default" : name }
+    var title: String {
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isDefault { return label.isEmpty ? "System default" : "\(label) (System default)" }
+        return label.isEmpty ? "Audio device" : label
+    }
 
     static func unique(_ choices: [AudioDeviceChoice]) -> [AudioDeviceChoice] {
         var seen = Set<String>()
@@ -43,6 +47,7 @@ struct SavedAudioDeviceSelection: Equatable {
 
         return Self(selectedDeviceID: selectedID,
                     savedDeviceUnavailable: savedDeviceID != nil && !savedIsAvailable,
-                    shouldApplyDevice: available.contains(selectedID) && currentDeviceID != selectedID)
+                    shouldApplyDevice: available.contains(selectedID) && currentDeviceID != selectedID &&
+                        !(currentDeviceID.isEmpty && selectedID == systemDefaultDeviceID))
     }
 }

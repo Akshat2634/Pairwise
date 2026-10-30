@@ -69,6 +69,7 @@ struct SettingsView: View {
         .frame(minWidth: 850, minHeight: 580)
         .tint(Theme.accent)
         .task {
+            rtc.refreshAudioDevices()
             while !Task.isCancelled {
                 permissions.refresh()
                 do { try await Task.sleep(for: .seconds(2)) } catch { break }
@@ -76,6 +77,7 @@ struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             permissions.refresh()
+            rtc.refreshAudioDevices()
         }
         .onChange(of: permissions.camera) { _, isAuthorized in
             guard isAuthorized else { return }
