@@ -17,7 +17,7 @@ struct AdminAuditEvent: Decodable, Identifiable, Equatable {
     let action: String
     let occurredAt: String
     var id: String { "\(occurredAt)-\(action)-\(targetId)" }
-    var date: Date { ISO8601DateFormatter().date(from: occurredAt) ?? .distantPast }
+    var date: Date? { ServerDate.parse(occurredAt) }
 }
 
 struct PairRoom: Codable, Identifiable, Equatable {
@@ -66,13 +66,13 @@ struct CallInvitation: Decodable, Identifiable, Equatable {
     var startedAt: String? = nil
     var endedAt: String? = nil
     let expiresAt: String
-    init(id: String, status: String, caller: TeamUser, target: TeamUser, room: PairRoom, expiresAt: String) {
+    init(id: String, status: String, caller: TeamUser, target: TeamUser, room: PairRoom, expiresAt: String, createdAt: String? = nil) {
         self.id = id
         self.status = status
         self.caller = caller
         self.target = target
         self.room = room
-        self.createdAt = nil
+        self.createdAt = createdAt
         self.expiresAt = expiresAt
     }
     init(from decoder: Decoder) throws {
