@@ -118,6 +118,13 @@ struct CallInvitation: Decodable, Identifiable, Equatable {
         default: startedAt == nil && endedAt != nil ? "Cancelled" : "Call ended"
         }
     }
+
+    func pendingParticipantLabel(viewerID: String?) -> String {
+        let state = status == "accepted" ? "Joining…" : "Calling…"
+        return caller.id == viewerID ? state : "\(state) · invited by \(caller.name)"
+    }
+
+    func canCancelPendingInvitation(userID: String?) -> Bool { status == "pending" && caller.id == userID }
 }
 struct CallResponse: Decodable { let call: CallInvitation }
 struct CallsResponse: Decodable { let calls: [CallInvitation] }

@@ -355,14 +355,18 @@ struct SharedScreenWindow: View {
             .buttonStyle(.borderless)
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(Theme.surface)
-            if rtc.participants.contains(where: { !$0.isLocal }) {
+            if rtc.participants.contains(where: { !$0.isLocal }) || !store.pendingCallInvitations.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 20) {
-                        ForEach(rtc.participants.filter { !$0.isLocal }) { person in
+                        ForEach(rtc.participants.filter { !$0.isLocal || $0.identity == rtc.activeSharerIdentity }) { person in
                             HStack(spacing: 6) {
-                                Text(person.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                Text(person.isLocal ? "You" : person.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                ParticipantScreenShareStatus(participant: person, sharerIdentity: rtc.activeSharerIdentity)
                                 ParticipantMicrophoneStatus(participant: person)
                             }
+                        }
+                        ForEach(store.pendingCallInvitations) { invitation in
+                            PendingCallParticipantRow(store: store, invitation: invitation)
                         }
                     }.padding(.horizontal, 16).padding(.vertical, 7)
                 }.fixedSize(horizontal: false, vertical: true)

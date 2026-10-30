@@ -37,8 +37,26 @@ final class AppStore: ObservableObject {
     @Published var adminAuditEvents: [AdminAuditEvent] = []
     @Published var adminAuditSupported = true
     @Published var rooms: [PairRoom] = []
-    @Published var callInvitations: [CallInvitation] = [] { didSet { updateCallAudio() } }
-    @Published var joinRequests: [CallJoinRequest] = []
+    @Published var callInvitations: [CallInvitation] = [] {
+        didSet {
+            updateCallAudio()
+            let pending = Set(oldValue.filter { $0.status == "pending" }.map(\.id))
+            for call in callInvitations where call.status == "declined" && pending.contains(call.id) {
+                if call.caller.id == user?.id || call.target.id == user?.id {
+                    callAudio.playEndFeedback(enabled: playCallSounds)
+                }
+            }
+        }
+    }
+    @Published var joinRequests: [CallJoinRequest] = [] {
+        didSet {
+            let pending = Set(oldValue.filter { $0.status == "pending" }.map(\.id))
+            for request in joinRequests where request.requester.id == user?.id &&
+                request.status == "declined" && pending.contains(request.id) {
+                callAudio.playEndFeedback(enabled: playCallSounds)
+            }
+        }
+    }
     @Published var activeTeamCalls: [PairRoom] = []
     /// One-line call status clears itself instead of leaking into the next call.
     @Published var callMessage: String? { didSet { scheduleCallMessageExpiry() } }
@@ -83,6 +101,16 @@ final class AppStore: ObservableObject {
 
     var incomingCall: CallInvitation? { callInvitations.first { $0.status == "pending" && $0.target.id == user?.id } }
     var outgoingCalls: [CallInvitation] { callInvitations.filter { $0.status == "pending" && $0.caller.id == user?.id } }
+    /// Every invitee still ringing or joining this room, regardless of who
+    /// invited them. A subscribed participant replaces their pending row.
+    var pendingCallInvitations: [CallInvitation] {
+        guard let activeRoom, user != nil else { return [] }
+        let joined = Set(rtc.participants.map(\.identity))
+        return callInvitations.filter {
+            $0.room.id == activeRoom.id && ["pending", "accepted"].contains($0.status) &&
+            !joined.contains($0.target.id)
+        }
+    }
     var incomingJoinRequests: [CallJoinRequest] {
         guard let user, let activeRoom else { return [] }
         return joinRequests.filter { request in
@@ -117,12 +145,12 @@ final class AppStore: ObservableObject {
             $0.room.participants.contains(where: { $0.id == user.id })
         }
     }
-    var canAddPerson: Bool { activeRoom != nil && rtc.participants.count + outgoingCalls.count < 4 }
+    var canAddPerson: Bool { activeRoom != nil && rtc.participants.count + pendingCallInvitations.count < 4 }
     var availablePeople: [TeamUser] {
         users.filter { person in
             person.id != user?.id && person.online == true && person.busy != true &&
             !rtc.participants.contains { $0.identity == person.id } &&
-            !outgoingCalls.contains { $0.target.id == person.id }
+            !pendingCallInvitations.contains { $0.target.id == person.id }
         }
     }
     private var generation = 0
@@ -142,6 +170,12 @@ final class AppStore: ObservableObject {
             UserDefaults.standard.set(initialServer.value, forKey: "serverAddress")
         }
         self.callAudio = callAudio ?? CallAudioFeedback()
+        rtc.onParticipantLeft = { [weak self] in
+            guard let self, self.activeRoom != nil,
+                  self.rtc.participants.contains(where: { !$0.isLocal }) else { return }
+            // The last remote departure already produces the call-end cue.
+            self.callAudio.playEndFeedback(enabled: self.playCallSounds)
+        }
         rtc.onProtectedPrivacyAppChanged = { [weak self] appName in
             Task { @MainActor [weak self] in
                 guard let self, self.rtc.isSharing else { return }
@@ -503,6 +537,7 @@ final class AppStore: ObservableObject {
             let response: CallJoinRequestResponse = try await api.post("v1/join-requests/\(request.id)/decline", body: Empty())
             joinRequests.removeAll { $0.id == request.id }
             joinRequests.append(response.request)
+            callAudio.playEndFeedback(enabled: playCallSounds)
         } catch { self.error = error.localizedDescription }
         await refreshInvitations()
     }
@@ -606,7 +641,13 @@ final class AppStore: ObservableObject {
         defer { busy = false }
         invitationPollSequence += 1
         callAudio.silenceIncoming(invitation.id)
-        do { try await api.send("v1/calls/\(invitation.id)/decline", body: EmptyBody()); await refreshInvitations() }
+        do {
+            let response: CallResponse = try await api.post("v1/calls/\(invitation.id)/decline", body: EmptyBody())
+            // Apply the confirmed transition before polling so a slow refresh
+            // cannot delay the decliner's feedback or replay it later.
+            callInvitations = callInvitations.map { $0.id == invitation.id ? response.call : $0 }
+            await refreshInvitations()
+        }
         catch {
             self.error = error.localizedDescription
             callAudio.retryIncoming()

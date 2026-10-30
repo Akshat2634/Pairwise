@@ -128,4 +128,13 @@ final class CallAudioFeedback {
     }
 
     func retryIncoming() { silencedID = nil }
+
+    /// A confirmed decline or a peer leaving a continuing group call uses the
+    /// same quiet ending cue as a hang-up, without changing connection state.
+    func playEndFeedback(enabled: Bool) {
+        guard enabled else { return }
+        transitionTone?.stop()
+        transitionTone = makePlayer(.disconnected)
+        transitionTone?.play()
+    }
 }

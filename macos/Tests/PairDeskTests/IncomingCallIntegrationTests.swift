@@ -8,6 +8,113 @@ import Testing
                             "Run scripts/test-call.sh for API, media, and popup integration"))
 struct IncomingCallIntegrationTests {
     @Test @MainActor
+    func testDeclineSoundsOnBothSidesAndGroupDepartureSoundsOnce() async throws {
+        let saved = UserDefaults.standard.object(forKey: "playCallSounds")
+        defer { UserDefaults.standard.set(saved, forKey: "playCallSounds") }
+        let endings = (0..<4).map { _ in CallEventTone() }
+        try await withClients(audio: { index in
+            CallAudioFeedback { $0 == .disconnected ? endings[index] : nil }
+        }) { clients in
+            let a = clients[0], b = clients[1], c = clients[2]
+            for client in clients { client.playCallSounds = true }
+            let bPerson = try #require(a.users.first { $0.id == b.user?.id })
+            let cPerson = try #require(a.users.first { $0.id == c.user?.id })
+            await a.call(bPerson)
+            await b.refreshInvitations()
+            await b.declineCall(try #require(b.incomingCall))
+            await a.refreshInvitations()
+            #expect(endings[0].plays == 1 && endings[1].plays == 1)
+            await a.refreshInvitations()
+            await b.refreshInvitations()
+            #expect(endings[0].plays == 1 && endings[1].plays == 1)
+            await a.refresh()
+            await b.refresh()
+            await a.call(bPerson)
+            await b.refreshInvitations()
+            await b.acceptCall(try #require(b.incomingCall))
+            try await settle { a.rtc.participants.count == 2 && b.rtc.participants.count == 2 }
+            await a.call(cPerson)
+            await c.refreshInvitations()
+            await c.declineCall(try #require(c.incomingCall))
+            await a.refreshInvitations()
+            await b.refreshInvitations()
+            #expect(endings[0].plays == 2 && endings[2].plays == 1)
+            #expect(endings[1].plays == 1, "Another member's declined invitation must not sound like a departure")
+            #expect(a.rtc.connected && b.rtc.connected)
+            await a.call(cPerson)
+            await c.refreshInvitations()
+            await c.acceptCall(try #require(c.incomingCall))
+            try await settle { a.rtc.participants.count == 3 && b.rtc.participants.count == 3 }
+            await c.leave()
+            try await settle { a.rtc.participants.count == 2 && b.rtc.participants.count == 2 }
+            #expect(endings[0].plays == 3 && endings[1].plays == 2)
+            #expect(endings[2].plays == 2, "The person leaving gets the existing hang-up cue once")
+            await a.refreshInvitations()
+            await b.refreshInvitations()
+            #expect(endings[0].plays == 3 && endings[1].plays == 2)
+            #expect(a.rtc.connected && b.rtc.connected)
+            // The in-call Accept/Decline popup also handles requests to join.
+            await c.requestToJoin(try #require(a.activeRoom))
+            await b.refreshInvitations()
+            await b.declineJoinRequest(try #require(b.incomingJoinRequests.first))
+            await c.refreshInvitations()
+            await a.refreshInvitations()
+            #expect(endings[1].plays == 3 && endings[2].plays == 3)
+            #expect(endings[0].plays == 3, "Only the responder and requester hear a declined join request")
+            await b.refreshInvitations()
+            await c.refreshInvitations()
+            #expect(endings[1].plays == 3 && endings[2].plays == 3)
+            a.playCallSounds = false
+            await b.leave()
+            try await settle { !a.rtc.connected }
+            #expect(endings[0].plays == 3, "Disabled sounds must stay silent on the final departure")
+        }
+    }
+
+    @Test @MainActor
+    func testEveryGroupMemberSeesAnotherMembersInviteAndJoiningState() async throws {
+        try await withClients { clients in
+            let a = clients[0], b = clients[1], c = clients[2], outsider = clients[3]
+            let aID = try #require(a.user?.id)
+            let bPerson = try #require(a.users.first { $0.id == b.user?.id })
+            await a.call(bPerson)
+            #expect(a.error == nil)
+            await b.refreshInvitations()
+            let firstCall = try #require(b.incomingCall)
+            await b.acceptCall(firstCall)
+            try await settle { a.rtc.participants.count == 2 && b.rtc.participants.count == 2 }
+            let roomID = try #require(b.activeRoom?.id)
+            let cPerson = try #require(a.users.first { $0.id == c.user?.id })
+            await a.call(cPerson)
+            #expect(a.error == nil)
+            await b.refreshInvitations()
+            let invitation = try #require(b.pendingCallInvitations.first { $0.target.id == c.user?.id })
+            #expect(invitation.caller.id == aID)
+            #expect(invitation.status == "pending")
+            #expect(b.outgoingCalls.isEmpty)
+            #expect(b.incomingCallPrompts.isEmpty)
+            #expect(!invitation.canCancelPendingInvitation(userID: b.user?.id))
+            #expect(!b.availablePeople.contains { $0.id == cPerson.id })
+            await outsider.refreshInvitations()
+            #expect(!outsider.callInvitations.contains { $0.id == invitation.id })
+            do {
+                try await b.api.send("v1/calls/\(invitation.id)/cancel", body: EmptyBody())
+                Issue.record("A different member cancelled the caller's invitation")
+            } catch let error as APIError { #expect(error.status == 403) }
+            // Accept without connecting C's media yet, so B must see Joining….
+            let accepted: CallResponse = try await c.api.post("v1/calls/\(invitation.id)/accept", body: EmptyBody())
+            await b.refreshInvitations()
+            #expect(b.pendingCallInvitations.first { $0.id == invitation.id }?.status == "accepted")
+            await c.join(accepted.call.room)
+            #expect(c.error == nil)
+            try await settle { b.rtc.participants.contains { $0.identity == cPerson.id } }
+            #expect(!b.pendingCallInvitations.contains { $0.id == invitation.id }, "The connected member replaces the pending row")
+            #expect(b.activeRoom?.id == roomID)
+            #expect(b.rtc.connected)
+        }
+    }
+
+    @Test @MainActor
     func testSharedScreenViewerClosesAndReopensOverLiveKitWithoutEndingCall() async throws {
         _ = NSApplication.shared
         let address = try #require(ProcessInfo.processInfo.environment["PAIRDESK_TEST_API"])
@@ -69,8 +176,11 @@ struct IncomingCallIntegrationTests {
                 defer { frames.cancel() }
                 let publication = try await host.localParticipant.publish(videoTrack: track)
                 try await settle { viewer.rtc.screenTrack != nil && windows.isShown("screen") }
+                #expect(viewer.rtc.activeSharerIdentity == logins[0].user.id,
+                        "The participant badge must identify the subscribed screen's owner")
                 try await host.localParticipant.unpublish(publication: publication)
                 try await settle { viewer.rtc.screenTrack == nil && !windows.isShown("screen") }
+                #expect(viewer.rtc.activeSharerIdentity == nil, "The sharing badge must clear when sharing stops")
                 frames.cancel()
                 #expect(viewer.rtc.connected)
                 #expect(host.connectionState == .connected)
@@ -97,7 +207,8 @@ struct IncomingCallIntegrationTests {
     }
 
     @MainActor
-    private func withClients(_ run: ([AppStore]) async throws -> Void) async throws {
+    private func withClients(audio: ((Int) -> CallAudioFeedback)? = nil,
+                             _ run: ([AppStore]) async throws -> Void) async throws {
         _ = NSApplication.shared
         let address = try #require(ProcessInfo.processInfo.environment["PAIRDESK_TEST_API"])
         let password = try #require(ProcessInfo.processInfo.environment["PAIRDESK_TEST_PASSWORD"])
@@ -109,7 +220,7 @@ struct IncomingCallIntegrationTests {
         for i in 1...4 {
             let login: LoginResponse = try await api.post("v1/login", body: LoginBody(
                 email: "integration-notification-\(i)@pairdesk.invalid", password: password))
-            let store = AppStore(callAudio: CallAudioFeedback { _ in nil })
+            let store = AppStore(callAudio: audio?(i - 1) ?? CallAudioFeedback { _ in nil })
             store.debugUseSession(user: login.user, token: login.token, server: address)
             store.startCallsMuted = true
             stores.append(store)

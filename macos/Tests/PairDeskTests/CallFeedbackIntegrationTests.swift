@@ -116,6 +116,8 @@ final class CallFeedbackIntegrationTests: XCTestCase {
             trace("Second call declined")
             await caller.refreshInvitations()
             XCTAssertEqual(calling.stops, 2, "Declining must stop ringback")
+            XCTAssertEqual(callerEnd.plays, 2, "The caller must hear the confirmed decline")
+            XCTAssertEqual(targetEnd.plays, 2, "The decliner must hear the confirmed decline")
             XCTAssertNil(target.incomingCall)
             XCTAssertEqual(ring.stops, 2)
             XCTAssertEqual(targetTune.plays, 1, "Declining must not confirm a connection")
@@ -156,8 +158,8 @@ final class CallFeedbackIntegrationTests: XCTestCase {
         }
         await target.leave()
         await caller.leave()
-        XCTAssertEqual(targetEnd.plays, 1, "Declined and cancelled calls must not play a disconnect tune")
-        XCTAssertEqual(callerEnd.plays, 1)
+        XCTAssertEqual(targetEnd.plays, 2, "Only hang-up and explicit decline play ending cues")
+        XCTAssertEqual(callerEnd.plays, 2, "Cancellation must not add a decline cue")
     }
 
     private func trace(_ message: String) {

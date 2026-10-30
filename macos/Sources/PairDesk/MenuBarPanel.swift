@@ -129,24 +129,19 @@ struct MenuBarPanel: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 sectionHeader("ON THIS CALL · \(rtc.participants.filter { !$0.isLocal }.count + 1)")
-                ForEach(rtc.participants.filter { !$0.isLocal }) { person in
+                ForEach(rtc.participants.filter { !$0.isLocal || $0.identity == rtc.activeSharerIdentity }) { person in
                     HStack(spacing: 10) {
                         PersonAvatar(name: person.name, id: person.identity, size: 28)
-                        Text(person.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                        Spacer()
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(person.isLocal ? "You" : person.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                            ParticipantScreenShareStatus(participant: person, sharerIdentity: rtc.activeSharerIdentity)
+                        }
+                        Spacer(minLength: 4)
                         ParticipantMicrophoneStatus(participant: person)
                     }
                 }
-                ForEach(store.outgoingCalls) { invitation in
-                    HStack(spacing: 10) {
-                        PersonAvatar(name: invitation.target.name, id: invitation.target.id, size: 28).opacity(0.6)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(invitation.target.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                            Text("Calling…").font(.caption).foregroundStyle(Theme.textMuted)
-                        }
-                        Spacer()
-                        Button("Cancel") { Task { await store.cancelCall(invitation) } }.buttonStyle(QuietButtonStyle(compact: true))
-                    }
+                ForEach(store.pendingCallInvitations) { invitation in
+                    PendingCallParticipantRow(store: store, invitation: invitation)
                 }
             }
             CameraStrip(feeds: rtc.cameraFeeds)
@@ -512,12 +507,16 @@ struct MenuBarPanel: View {
     }
     private func status(_ person: TeamUser) -> String {
         if rtc.participants.contains(where: { $0.identity == person.id }) { return "In this call" }
+        if let invitation = store.pendingCallInvitations.first(where: { $0.target.id == person.id }) {
+            return invitation.status == "accepted" ? "Joining this call" : "Invited to this call"
+        }
         return person.online != true ? "Offline" : (person.busy == true ? "In a call" : "Online")
     }
     private func canCall(_ person: TeamUser) -> Bool {
         !store.busy && person.online == true && person.busy != true &&
         !rtc.participants.contains(where: { $0.identity == person.id }) &&
         !store.outgoingCalls.contains(where: { $0.target.id == person.id }) &&
+        !store.pendingCallInvitations.contains(where: { $0.target.id == person.id }) &&
         (store.activeRoom == nil || store.canAddPerson)
     }
     private func show(_ id: String) {
