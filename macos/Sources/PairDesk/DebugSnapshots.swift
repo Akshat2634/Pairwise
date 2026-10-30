@@ -218,6 +218,25 @@ enum UISnapshots {
         snapshot("window-settings-screen-share", to: directory, size: CGSize(width: 960, height: 660)) {
             SettingsView(store: idle, rtc: idle.rtc, loginItem: loginItem, initialSection: .screenShare)
         }
+        let privacySuite = "PairDesk.UISnapshots.Privacy.\(UUID().uuidString)"
+        let privacyDefaults = UserDefaults(suiteName: privacySuite)!
+        defer { privacyDefaults.removePersistentDomain(forName: privacySuite) }
+        let emptyPrivacy = PrivacyVeilPreferences(defaults: privacyDefaults)
+        for (name, size) in [("window-settings-privacy-empty", CGSize(width: 960, height: 760)),
+                             ("window-settings-privacy-minimum", CGSize(width: 850, height: 580)),
+                             ("window-settings-privacy-wide", CGSize(width: 1200, height: 820))] {
+            snapshot(name, to: directory, size: size) {
+                SettingsView(store: idle, rtc: idle.rtc, loginItem: loginItem, initialSection: .privacy, privacyVeil: emptyPrivacy)
+            }
+        }
+        let hiddenApps = [HiddenApplication(bundleIdentifier: "com.example.messages", name: "Messages"),
+                          HiddenApplication(bundleIdentifier: "com.example.password-manager.personal", name: "Personal Password Manager")]
+        privacyDefaults.set(try? JSONEncoder().encode(hiddenApps), forKey: PrivacyVeilPreferences.defaultsKey)
+        privacyDefaults.set(true, forKey: PrivacyVeilPreferences.hideNotificationsDefaultsKey)
+        let configuredPrivacy = PrivacyVeilPreferences(defaults: privacyDefaults)
+        snapshot("window-settings-privacy-configured", to: directory, size: CGSize(width: 960, height: 760)) {
+            SettingsView(store: idle, rtc: idle.rtc, loginItem: loginItem, initialSection: .privacy, privacyVeil: configuredPrivacy)
+        }
         snapshot("window-settings-camera-test", to: directory, size: CGSize(width: 960, height: 660)) {
             SettingsView(store: idle, rtc: idle.rtc, loginItem: loginItem, initialSection: .camera)
         }
