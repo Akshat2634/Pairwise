@@ -2650,6 +2650,13 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
 
     var debugHostCursorPanel: NSPanel? { hostCursorOverlay.panel }
 
+    /// Native viewer fixtures use synthetic tracks without recording a desktop.
+    func debugSetScreenShare(track: VideoTrack?, sharer: String?, local: Bool = false) {
+        screenTrack = track
+        activeSharerIdentity = sharer
+        isSharing = local
+    }
+
     /// Exercise real cursor packets and native presentation without recording a desktop.
     func debugStartCursorShare(bounds: CGRect, session: String, hiddenApplicationNames: [String] = []) {
         resetIndependentCursors()
