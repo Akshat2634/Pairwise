@@ -70,6 +70,9 @@ note. A failure must be fixed and the entire affected scenario repeated.
 | Launch another PairDesk copy | Launching a copy from Applications while the installed app is running does not create another process, menu-bar item, API session, or presence heartbeat. The existing instance remains usable. Repeat from a mounted test DMG. | Not run |
 | Hang up either side of a 1:1 call | Both clients become available; either person can immediately start another call. Repeat with each side ending. | Not run |
 | Three- and four-person call | Join/leave requests work; one participant leaving does not strand the remaining pair; presence and cursors clear for the leaver. | Not run |
+| Invitations shared with current call members | A and B are connected; A invites C. Both see C as Calling, then Joining until C connects. B cannot cancel A's invitation. Check both the menu bar and shared-screen window, cleanup after decline/cancel/expiry, and shared four-person capacity. | Not run |
+| Participant sharing indicator | The active sharer's name shows Sharing screen in the menu bar and viewer participant strip, independently of their microphone status. Stop sharing and hand off to another member; the badge clears or moves. When sharing locally, the menu shows You with the same badge. | Not run |
+| Call event sounds | Decline a direct invitation, a group invitation, and a request to join: the caller/requester and person declining hear one quiet ending cue. In a three-person call, one member leaves and both remaining members hear the cue while their call continues. Refreshing does not replay it. Repeat with call sounds disabled; no cue plays. | Not run |
 | Two networks | Repeat the four-person scenario with participants on at least two networks and record direct/relay route and measured RTT. | Not run |
 
 ## Measurements

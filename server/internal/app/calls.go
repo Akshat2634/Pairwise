@@ -57,7 +57,11 @@ func (s *Server) calls(w http.ResponseWriter, r *http.Request, u User) {
 		changed := s.pruneCallsLocked(now)
 		result := []apiCall{}
 		for _, invite := range s.store.s.Calls {
-			if invite.CallerID == u.ID || invite.TargetID == u.ID {
+			// Current members can see who is being added to their room. Only
+			// the caller and recipient receive the invitation's private history.
+			sharedActive := (invite.Status == callPending || invite.Status == callAccepted) &&
+				activeMemberInRoomLocked(s.store.s, u.ID, invite.RoomID, now)
+			if invite.CallerID == u.ID || invite.TargetID == u.ID || sharedActive {
 				if time.Since(invite.UpdatedAt) <= callHistoryTTL {
 					if invite.Status == callAccepted {
 						rm := s.store.s.Rooms[invite.RoomID]

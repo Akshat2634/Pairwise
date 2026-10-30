@@ -70,6 +70,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         }
     }
     @Published private(set) var participants: [CallParticipant] = [] { didSet { updateHostCursors() } }
+    private var knownRemoteParticipants = Set<String>()
     @Published private(set) var screenTrack: VideoTrack?
     @Published private(set) var cameraTracks: [String: VideoTrack] = [:]
     @Published private(set) var status = "Disconnected"
@@ -96,6 +97,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
     private var privacyVeilStopRequested = false
     var privacyVeilActive: Bool { !privacyVeilAppNames.isEmpty || !privacyVeilWindowNames.isEmpty }
     var onProtectedPrivacyAppChanged: ((String) -> Void)?
+    var onParticipantLeft: (() -> Void)?
     @Published private(set) var remotePointers: [RemotePointer] = [] { didSet { updateHostCursors() } }
     @Published private(set) var cursorSessionID: String?
     @Published private(set) var localCursorPosition: CGPoint?
@@ -314,6 +316,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
 
     func connect(url: String, token: String, identity: String, name: String) async throws {
         guard room == nil else { throw LiveKitError(.invalidState, message: "Already connected") }
+        knownRemoteParticipants.removeAll()
         error = nil
         status = "Connecting…"
         controlTransportFailed = false
@@ -374,6 +377,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         isCameraEnabled = false
         cameraTracks.removeAll()
         connected = false
+        knownRemoteParticipants.removeAll()
         participants = []
         activeSharerIdentity = nil
         remotePointers = []
@@ -1442,6 +1446,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
         let identity = participant.identity?.stringValue ?? ""
         Task { @MainActor [weak self] in
             guard let self, self.room === room else { return }
+            let wasPresent = self.knownRemoteParticipants.remove(identity) != nil
             let matches = self.remoteAudioRenderers.filter { $0.value.identity == identity }
             for (sid, attachment) in matches {
                 attachment.track.remove(audioRenderer: attachment.renderer)
@@ -1449,6 +1454,7 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
             }
             self.cameraTracks.removeValue(forKey: identity)
             self.refreshParticipants()
+            if wasPresent, self.connected, !self.isReconnecting { self.onParticipantLeft?() }
             self.refreshSharer()
             self.clearAnnotationParticipant(identity)
             self.removeRemotePointer(identity)
@@ -2610,6 +2616,9 @@ final class RTCService: NSObject, ObservableObject, RoomDelegate, VideoCapturerD
                                    isLocal: false, isSpeaking: participant.isSpeaking,
                                    isMicrophoneMuted: !participant.isMicrophoneEnabled())
         }.sorted { $0.identity < $1.identity }
+        // Track membership until the disconnect event, even if an earlier
+        // track-unsubscribe callback has already refreshed the visible roster.
+        knownRemoteParticipants.formUnion(remotes.map(\.identity))
         participants = Array(([local] + remotes).prefix(4))
     }
 

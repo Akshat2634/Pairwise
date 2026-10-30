@@ -121,6 +121,35 @@ enum UISnapshots {
                                 microphoneEnabled: true)
         }
         snapshot("menu-in-call", to: directory, compact: true) { MenuBarPanel(store: inCall, rtc: inCall.rtc, loginItem: loginItem) }
+        func invitingStore(viewer: TeamUser) -> AppStore {
+            store {
+                $0.user = viewer; $0.users = team; $0.directoryStatus = "Team connected"
+                $0.activeRoom = PairRoom(id: room.id, name: room.name, participantCount: 2, participants: [me, harshit])
+                $0.callInvitations = [
+                    CallInvitation(id: "calling", status: "pending", caller: harshit, target: team[2], room: room, expiresAt: ""),
+                    CallInvitation(id: "joining", status: "accepted", caller: harshit, target: team[3], room: room, expiresAt: ""),
+                ]
+                $0.rtc.debugSetCall(participants: [CallParticipant(identity: me.id, name: me.name, isLocal: viewer.id == me.id),
+                                                   CallParticipant(identity: harshit.id, name: harshit.name, isLocal: viewer.id == harshit.id)],
+                                    microphoneEnabled: false)
+            }
+        }
+        let groupObserver = invitingStore(viewer: me)
+        let groupInviter = invitingStore(viewer: harshit)
+        snapshot("menu-group-invites-observer", to: directory, compact: true) { MenuBarPanel(store: groupObserver, rtc: groupObserver.rtc, loginItem: loginItem) }
+        snapshot("menu-group-invites-inviter", to: directory, compact: true) { MenuBarPanel(store: groupInviter, rtc: groupInviter.rtc, loginItem: loginItem) }
+        snapshot("window-group-invites", to: directory, size: CGSize(width: 1000, height: 620)) {
+            SharedScreenWindow(store: groupObserver, rtc: groupObserver.rtc, transcripts: groupObserver.transcripts, agentBridge: groupObserver.agentBridge)
+        }
+        groupObserver.rtc.debugSetScreenShare(track: nil, sharer: harshit.id)
+        snapshot("menu-group-sharing", to: directory, compact: true) { MenuBarPanel(store: groupObserver, rtc: groupObserver.rtc, loginItem: loginItem) }
+        snapshot("window-group-sharing", to: directory, size: CGSize(width: 1000, height: 620)) {
+            SharedScreenWindow(store: groupObserver, rtc: groupObserver.rtc, transcripts: groupObserver.transcripts, agentBridge: groupObserver.agentBridge)
+        }
+        groupObserver.rtc.debugSetScreenShare(track: nil, sharer: me.id, local: true)
+        snapshot("menu-group-sharing-you", to: directory, compact: true) { MenuBarPanel(store: groupObserver, rtc: groupObserver.rtc, loginItem: loginItem) }
+        groupObserver.rtc.debugSetScreenShare(track: nil, sharer: nil)
+        snapshot("menu-group-sharing-stopped", to: directory, compact: true) { MenuBarPanel(store: groupObserver, rtc: groupObserver.rtc, loginItem: loginItem) }
         let joinRequestCall = store {
             $0.user = me; $0.users = team; $0.directoryStatus = "Team connected"
             $0.activeRoom = room; $0.callStartedAt = Date().addingTimeInterval(-62)
