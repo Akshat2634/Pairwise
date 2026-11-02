@@ -6,19 +6,32 @@ that record or make a feature accepted by itself.
 
 ## Before the call
 
-1. Install the **same PairDesk build** on both Macs in `/Applications`. Check
-   **PairDesk → About PairDesk** and note the version and build number. Do not
-   compare results from different versions.
-2. At sign-in, expand **Server address** and confirm both Macs use the exact
-   team API address supplied by the administrator. Do not leave a local
+1. Install the current **0.8.1 (build 26)** UAT DMG from the [Pairwise release
+   page](https://github.com/EvAlssment/Pairwise/releases/tag/pairwise-uat-0.8.1-build26)
+   on both Macs in `/Applications`. The DMG is universal for Apple silicon and
+   Intel and requires macOS 14 or later. Replace an older app if prompted, then
+   quit and reopen PairDesk from Applications. Do not compare results from
+   different builds.
+2. Confirm build `26` in PairDesk’s `CFBundleVersion` if needed. Finder’s Get
+   Info panel may show only version `0.8.1`; the build number can be checked in
+   Terminal with:
+   `/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /Applications/PairDesk.app/Contents/Info.plist`.
+3. At sign-in, expand **Server address** and confirm both Macs use the team
+   HTTPS API address supplied by the administrator. Do not leave a local
    `localhost`/`127.0.0.1` address on a tester's Mac.
-3. Sign in with the separate team accounts provided to each tester. Exchange
-   passwords through a private channel; never put them in this repository,
-   screenshots, or test notes.
-4. On each Mac, record only the macOS version, Mac model/chip, display scaling,
+4. New testers should choose **Create account**, enter an approved email, and
+   complete the email verification code flow before setting their password.
+   UAT sign-up is restricted to configured approved addresses (currently
+   `futurepath.ai` plus an administrator-managed exception). If an older client
+   says “Email verification is required. Update PairDesk to create an account,”
+   install build 26, quit the old app, reopen the updated copy, and retry.
+5. Sign in with the separate team accounts provided to existing testers.
+   Exchange passwords through a private channel; never put them in this
+   repository, screenshots, or test notes.
+6. On each Mac, record only the macOS version, Mac model/chip, display scaling,
    and network type/region. Do not record account identifiers, serial numbers,
    public IP addresses, or tokens.
-5. For screen control, the person sharing must grant Accessibility to the
+7. For screen control, the person sharing must grant Accessibility to the
    installed PairDesk copy in `/Applications`. Choose the display in Apple's
    screen-sharing picker. Camera and microphone remain off until enabled.
 

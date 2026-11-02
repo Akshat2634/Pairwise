@@ -12,11 +12,15 @@ The current client supports macOS 14 and later. It is an early-stage project; te
 
 **Download the complete source:** [ZIP archive of the latest `main` branch](https://github.com/EvAlssment/Pairwise/archive/refs/heads/main.zip) · [browse the repository](https://github.com/EvAlssment/Pairwise)
 
-**Downloads:** browse [GitHub Releases](https://github.com/EvAlssment/Pairwise/releases) for published builds. Check the version and release notes before installing: the source on `main` can be newer than the latest published DMG. The current app version is recorded in [`macos/Info.plist`](macos/Info.plist). Development builds are not a substitute for a signed and notarized release; see [the release guide](docs/releasing.md).
+**Current team UAT build:** [Pairwise 0.8.1, build 26](https://github.com/EvAlssment/Pairwise/releases/tag/pairwise-uat-0.8.1-build26). Download the single universal [PairDesk.dmg](https://github.com/EvAlssment/Pairwise/releases/download/pairwise-uat-0.8.1-build26/PairDesk.dmg) for either Apple silicon or Intel Macs running macOS 14 or later. The app is Developer ID signed and notarized. The release page also provides the app ZIP and SHA-256 checksums.
 
-Installable macOS builds will be published under [GitHub Releases](https://github.com/EvAlssment/Pairwise/releases) once the release signing credentials are configured. See [the release guide](docs/releasing.md).
+To install, open the DMG, drag PairDesk to Applications, and replace an older copy if macOS asks. Eject the DMG, then launch PairDesk from Applications. Existing app preferences and sign-in are normally retained when updating in place. Check **PairDesk → About PairDesk** for version 0.8.1; the build number is 26. The Finder Get Info panel shows the version but may not show the build number.
 
-The ZIP contains the tracked source code and documentation. It is not an installable app; follow the build steps below to create a local macOS build. Whisper source and model files are downloaded separately by the preparation script and are not included in the repository.
+For this UAT deployment, sign-up requires an email verification code and is limited to the configured approved email addresses (currently the FuturePath domain plus an administrator-managed exception). If your email is not accepted, contact the team administrator. An older client may show “Email verification is required. Update PairDesk to create an account.” Install build 26 before trying to sign up again. At sign-in, confirm the team HTTPS server address; do not use a local `localhost` address for team UAT.
+
+See the [tester quick start](docs/tester-quick-start.md) for installation, account setup, permissions, and first-call checks, plus [the release guide](docs/releasing.md) for build and signing details. The source on `main` can be newer than the latest published DMG; check the release page before installing.
+
+The source ZIP contains tracked code and documentation; it is not an installable app. Whisper source and model files are downloaded separately by the preparation script and are not included in the repository.
 
 ## Screen sharing and macOS permissions
 
