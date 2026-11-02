@@ -372,7 +372,10 @@ struct SharedScreenWindow: View {
                 }.fixedSize(horizontal: false, vertical: true)
                     .background(Theme.surface)
             }
-            CameraStrip(feeds: rtc.cameraFeeds).padding(.horizontal, 12).padding(.vertical, 4)
+            CameraStrip(feeds: rtc.cameraFeeds) {
+                AppWindows.shared.showCameraGallery(rtc: rtc)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 4)
             if let notice = rtc.cameraDeviceNotice {
                 Text(notice).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
             }

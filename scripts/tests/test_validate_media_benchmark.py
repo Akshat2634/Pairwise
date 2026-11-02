@@ -14,7 +14,7 @@ VALIDATOR = Path(__file__).resolve().parents[1] / "validate-media-benchmark.py"
 
 def benchmark(profile: str, participants: int) -> dict:
     constrained = profile == "constrained"
-    return {
+    report = {
         "schemaVersion": 6,
         "classification": f"synthetic-{profile}-ci",
         "networkProfile": profile,
@@ -57,6 +57,38 @@ def benchmark(profile: str, participants: int) -> dict:
             "logicalCPUCount": 8,
         },
         "unmeasured": ["pointer_to_render_latency", "sender_cpu", "receiver_cpu", "physical_readability"],
+    }
+    if participants == 4:
+        report["cameraSimulcast"] = {
+            "source": "synthetic-camera-simulcast",
+            "publishWidth": 1920,
+            "publishHeight": 1080,
+            "maximumFramesPerSecond": 30,
+            "harnessProcessCPUPercent": 88.5,
+            "receivers": [
+                camera_receiver("thumbnail", 320, 180, 320, 180),
+                camera_receiver("standard", 640, 360, 640, 360),
+                camera_receiver("gallery", 1920, 1080, 1920, 1080),
+            ],
+            "unmeasured": ["separate_sender_receiver_cpu", "physical_camera_quality", "readability"],
+        }
+    return report
+
+
+def camera_receiver(role: str, requested_width: int, requested_height: int,
+                    received_width: int, received_height: int) -> dict:
+    return {
+        "viewRole": role,
+        "requestedWidth": requested_width,
+        "requestedHeight": requested_height,
+        "receivedWidth": received_width,
+        "receivedHeight": received_height,
+        "observedFramesPerSecond": 29.5,
+        "receivedBitrateKilobitsPerSecond": 620.0,
+        "framesReceived": 90,
+        "timeToFirstFrameMilliseconds": 130.0,
+        "packetLossPercent": 0.0,
+        "selectedPathRTTMilliseconds": 2.0,
     }
 
 
