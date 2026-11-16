@@ -1,5 +1,9 @@
+#include "Api.h"
 #include "Protocol.h"
+#include <QCoreApplication>
+#include <QEventLoop>
 #include <QJsonDocument>
+#include <QTimer>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -11,6 +15,7 @@
 using namespace std::chrono_literals;
 class Receiver : public livekit::RoomDelegate {
 public:
+  std::string expectedSender = "sender";
   std::atomic<int> audioFrames = 0, cameraFrames = 0, screenFrames = 0,
                    dataPackets = 0;
   void onTrackSubscribed(livekit::Room &room,
@@ -43,7 +48,7 @@ public:
                             const livekit::UserDataPacketEvent &e) override {
     // Identity must come from the authenticated SDK participant, never payload
     // JSON.
-    if (!e.participant || e.participant->identity() != "sender" ||
+    if (!e.participant || e.participant->identity() != expectedSender ||
         e.topic != pairwise::ControlTopic)
       return;
     auto p = QJsonDocument::fromJson(
@@ -55,7 +60,30 @@ public:
       ++dataPackets;
   }
 };
-int main() {
+static void sharePermission(bool enabled) {
+  const auto base = std::getenv("PAIRWISE_API_URL");
+  if (!base)
+    return;
+  const auto token = std::getenv("PAIRWISE_API_SENDER_TOKEN"),
+             room = std::getenv("PAIRWISE_API_ROOM_ID");
+  if (!token || !room)
+    throw std::runtime_error("missing API test admission");
+  pairwise::Api api;
+  api.configure(QUrl(QString::fromUtf8(base)), QString::fromUtf8(token));
+  QEventLoop loop;
+  bool ok = false;
+  api.request("/v1/rooms/" + QString::fromUtf8(room) + "/share", "POST",
+              {{"enabled", enabled}}, &loop, [&](pairwise::ApiResult result) {
+                ok = bool(result);
+                loop.quit();
+              });
+  QTimer::singleShot(20000, &loop, &QEventLoop::quit);
+  loop.exec();
+  if (!ok)
+    throw std::runtime_error("API screen-share permission failed");
+}
+int main(int argc, char **argv) {
+  QCoreApplication app(argc, argv);
   const auto url = std::getenv("PAIRWISE_MEDIA_TEST_URL"),
              senderToken = std::getenv("PAIRWISE_MEDIA_SENDER_TOKEN"),
              receiverToken = std::getenv("PAIRWISE_MEDIA_RECEIVER_TOKEN");
@@ -70,6 +98,9 @@ int main() {
   int result = 1;
   try {
     Receiver delegate;
+    if (const auto id = std::getenv("PAIRWISE_MEDIA_SENDER_ID"))
+      delegate.expectedSender = id;
+    const auto receiverID = std::getenv("PAIRWISE_MEDIA_RECEIVER_ID");
     livekit::Room receiver, sender;
     receiver.setDelegate(&delegate);
     livekit::RoomOptions options;
@@ -87,6 +118,7 @@ int main() {
          screen = std::make_shared<livekit::VideoSource>(320, 180);
     auto cameraTrack = local->publishVideoTrack(
         "camera", camera, livekit::TrackSource::SOURCE_CAMERA);
+    sharePermission(true);
     auto screenTrack =
         local->publishVideoTrack("pairdesk.screen.display", screen,
                                  livekit::TrackSource::SOURCE_SCREENSHARE);
@@ -115,7 +147,7 @@ int main() {
       if (tick % 50 == 0)
         local->publishData(
             std::vector<std::uint8_t>(bytes.begin(), bytes.end()), true,
-            {"receiver"}, pairwise::ControlTopic);
+            {receiverID ? receiverID : "receiver"}, pairwise::ControlTopic);
       if (delegate.audioFrames > 10 && delegate.cameraFrames > 3 &&
           delegate.screenFrames > 3 && delegate.dataPackets > 0) {
         result = 0;
@@ -130,10 +162,12 @@ int main() {
     local->unpublishTrack(audio->sid());
     local->unpublishTrack(cameraTrack->sid());
     local->unpublishTrack(screenTrack->sid());
+    sharePermission(false);
     sender.disconnect();
     receiver.disconnect();
     receiver.setDelegate(nullptr);
   } catch (const std::exception &e) {
+    result = 1;
     std::cerr << "Synthetic media integration failed: " << e.what() << "\n";
   }
   livekit::shutdown();

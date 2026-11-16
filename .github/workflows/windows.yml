@@ -19,6 +19,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.6'
+          cache-dependency-path: server/go.sum
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
@@ -36,6 +40,9 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Test API lifecycle and macOS wire compatibility
         run: ctest --test-dir build/windows -C Release --output-on-failure
+      - name: Build isolated Pairwise API for native end-to-end test
+        working-directory: server
+        run: go build -o ../build/windows/pairwise-api.exe ./cmd/pairdesk-api
       - name: Stage native runtime and build validated unsigned MSIX
         shell: pwsh
         run: |
@@ -52,7 +59,7 @@ jobs:
           if (!$app.WaitForExit(30000)) { $app.Kill(); throw 'Native startup/shutdown timed out.' }
           if ($app.ExitCode) { throw "Native smoke test failed: $($app.ExitCode)" }
           $env:PATH = "$pwd/build/stage;$env:PATH"
-          python windows/tests/run-media-test.py build/windows/Release/pairwise_media_test.exe
+          python windows/tests/run-media-test.py build/windows/Release/pairwise_media_test.exe --api build/windows/pairwise-api.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./windows/packaging/package.ps1 -Stage build/stage -Output build/packages
       - uses: actions/upload-artifact@v6
