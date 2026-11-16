@@ -110,6 +110,7 @@ MainWindow::MainWindow()
   auto home = new QWidget;
   auto homeLayout = new QVBoxLayout(home);
   status = new QLabel("Ready");
+  status->setTextFormat(Qt::PlainText);
   homeLayout->addWidget(status);
   auto tabs = new QTabWidget;
   team = new QListWidget;
@@ -227,6 +228,7 @@ MainWindow::MainWindow()
   controlStatus = new QLabel("Remote control is off. Escape releases control. "
                              "Ctrl+Alt+Escape stops all remote input.");
   controlStatus->setWordWrap(true);
+  controlStatus->setTextFormat(Qt::PlainText);
   homeLayout->addWidget(controlStatus);
   cameraRow = new QWidget;
   cameraRow->setLayout(new QHBoxLayout);
@@ -379,6 +381,8 @@ MainWindow::MainWindow()
             name(id) + " wants to control your shared display. Allow mouse, "
                        "keyboard, and plain-text copy/paste for this call?",
             QMessageBox::Yes | QMessageBox::No, this);
+        prompt->setTextFormat(Qt::PlainText);
+        prompt->setDefaultButton(QMessageBox::No);
         prompt->setAttribute(Qt::WA_DeleteOnClose);
         connect(prompt, &QMessageBox::finished, this, [this, id](int result) {
           if (result == QMessageBox::Yes)
@@ -523,6 +527,7 @@ void MainWindow::refresh() {
         auto p = new QMessageBox(QMessageBox::Question, "Incoming call",
                                  other["name"].toString() + " is calling.",
                                  QMessageBox::Yes | QMessageBox::No, this);
+        p->setTextFormat(Qt::PlainText);
         p->button(QMessageBox::Yes)->setText("Accept");
         p->button(QMessageBox::No)->setText("Decline");
         p->setAttribute(Qt::WA_DeleteOnClose);
