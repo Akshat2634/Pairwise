@@ -12,6 +12,7 @@ class FakeApi : public QObject {
 public:
   QTcpServer server;
   QStringList paths;
+  QList<QJsonObject> invitations;
   QJsonArray calls, requests;
   bool failHeartbeat = false;
   explicit FakeApi() {
@@ -36,7 +37,15 @@ public:
           paths << path;
           QJsonObject body;
           int status = 200;
-          if (path == "/v1/login")
+          if (path == "/v1/calls" && headers.startsWith("POST ")) {
+            invitations.append(
+                QJsonDocument::fromJson(buffer->mid(split + 4, length))
+                    .object());
+            body = {
+                {"call", QJsonObject{{"id", "invitation"},
+                                     {"status", "pending"},
+                                     {"room", QJsonObject{{"id", "room"}}}}}};
+          } else if (path == "/v1/login")
             body = {{"token", "test-session"},
                     {"user", QJsonObject{{"id", "self"}, {"name", "Me"}}}};
           else if (path == "/v1/users")
@@ -256,6 +265,31 @@ private slots:
     session.logout();
     QVERIFY(!session.signedIn);
     QVERIFY(session.user.isEmpty());
+  }
+  void directCallInvitesStayInCurrentRoomAndCanCancel() {
+    FakeApi fake;
+    CallSession session;
+    QSignalSpy media(&session, &CallSession::connectMedia);
+    QSignalSpy errors(&session, &CallSession::error);
+    session.login(fake.url(), "me@example.com", "password");
+    QTRY_VERIFY(session.signedIn);
+    session.call("peer");
+    QTRY_COMPARE(media.count(), 1);
+    QCOMPARE(session.roomId, QString("room"));
+    QVERIFY(!fake.invitations.first().contains("roomId"));
+    session.mediaConnected();
+    session.call("second");
+    QTRY_COMPARE(fake.invitations.size(), 2);
+    QTRY_VERIFY(!session.busy);
+    QCOMPARE(fake.invitations.last()["roomId"].toString(), QString("room"));
+    QCOMPARE(media.count(), 1);
+    session.answer("unrelated-call", true);
+    QCOMPARE(errors.count(), 1);
+    QVERIFY(!fake.paths.contains("/v1/calls/unrelated-call/accept"));
+    session.cancelCall("invitation");
+    QTRY_VERIFY(fake.paths.contains("/v1/calls/invitation/cancel"));
+    session.leave();
+    QTRY_VERIFY(fake.paths.contains("/v1/rooms/room/leave"));
   }
   void approvalBeforeFirstPollAndNoHistoryReconnect() {
     FakeApi fake;
