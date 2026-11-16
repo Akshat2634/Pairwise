@@ -82,6 +82,8 @@ or approved request. Historical approvals never reconnect automatically.
 `packaging/package.ps1` uses Windows SDK MakeAppx validation and builds an x64 MSIX. The minimum OS is embedded
 in the package manifest. `stage-runtime.ps1` copies the Visual Studio 2022 x64 redistributable CRT DLLs
 into the app directory; packaging refuses missing CRT, Qt, capture-plugin or LiveKit runtime files.
+Before packaging, copy `windows/third_party` to `build/stage/third-party-notices` along with the root
+`LICENSE` and `THIRD_PARTY_NOTICES.md`; CI stages these automatically.
 For release, pass the subject of the actual publisher certificate as `-Publisher`
 and an installed certificate thumbprint as `-CertificateThumbprint`. Signing and timestamping must succeed,
 and SignTool verifies the result. The script accepts no private key/password arguments.
