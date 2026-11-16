@@ -12,6 +12,9 @@ if (!(Test-Path "$Stage/Pairwise.exe")) { throw 'Missing staged executable.' }
 foreach ($name in @('msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll','vcruntime140.dll','vcruntime140_1.dll','livekit.dll','livekit_ffi.dll','Qt6Core.dll','platforms/qwindows.dll','multimedia/ffmpegmediaplugin.dll')) {
     if (!(Test-Path "$Stage/$name")) { throw "Required runtime file missing: $name. Run windeployqt and stage-runtime.ps1 before packaging." }
 }
+foreach ($name in @('README.md','sources.json','LiveKit-Cpp-LICENSE.txt','LiveKit-Rust-LICENSE.txt','Qt-LGPL-3.0.txt','Qt-GPL-3.0.txt','FFmpeg-LGPL-2.1.txt','Qt-FFmpeg-attribution.json')) {
+    if (!(Test-Path "$Stage/third-party-notices/$name")) { throw "Required native component notice missing: $name" }
+}
 New-Item -ItemType Directory -Force $Output | Out-Null
 $Stage = (Resolve-Path $Stage).Path
 $Output = (Resolve-Path $Output).Path

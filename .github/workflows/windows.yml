@@ -60,6 +60,7 @@ jobs:
           ./windows/packaging/stage-runtime.ps1 -Stage build/stage
           Copy-Item LICENSE build/stage/LICENSE.txt
           Copy-Item THIRD_PARTY_NOTICES.md build/stage/THIRD_PARTY_NOTICES.md
+          Copy-Item -Recurse windows/third_party build/stage/third-party-notices
           Copy-Item -Recurse .cache/livekit/livekit-sdk-windows-x64-1.13.1/share build/stage/livekit-notices
           $env:QT_QPA_PLATFORM = 'offscreen'
           $app = Start-Process build/stage/Pairwise.exe -ArgumentList '--smoke-test' -PassThru
