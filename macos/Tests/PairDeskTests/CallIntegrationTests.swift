@@ -471,7 +471,8 @@ final class CallIntegrationTests: XCTestCase {
                     reportStatistics: true)
                 let cameraCapturer = try XCTUnwrap(cameraTrack.capturer as? BufferCapturer)
                 let cameraPixels = try (0..<8).map {
-                    try syntheticPixelBuffer(width: 1920, height: 1080, phase: $0 * 37)
+                    try syntheticPixelBuffer(width: 1920, height: 1080, phase: $0 * 37,
+                                             includeCameraPattern: true)
                 }
                 cameraCapturer.capture(try XCTUnwrap(cameraPixels.first))
                 frameTask = Task {
@@ -524,6 +525,9 @@ final class CallIntegrationTests: XCTestCase {
                     "rid=\($0.rid ?? "unknown") active=\(String(describing: $0.active)) " +
                     "encoded=\(String(describing: $0.frameWidth))x\(String(describing: $0.frameHeight)) " +
                     "fps=\(String(describing: $0.framesPerSecond)) " +
+                    "targetBitrate=\(String(describing: $0.targetBitrate)) " +
+                    "bytesSent=\(String(describing: $0.bytesSent)) " +
+                    "framesEncoded=\(String(describing: $0.framesEncoded)) " +
                     "limitation=\(String(describing: $0.qualityLimitationReason))"
                 } ?? []
                 print("[CameraBenchmark] layer warm-up settled=\(settled); encoders: \(encoderDiagnostics)")
@@ -597,7 +601,8 @@ final class CallIntegrationTests: XCTestCase {
     }
 
     private func syntheticPixelBuffer(width: Int = 640, height: Int = 480, phase: Int = 0,
-                                      includeTextPattern: Bool = false) throws -> CVPixelBuffer {
+                                      includeTextPattern: Bool = false,
+                                      includeCameraPattern: Bool = false) throws -> CVPixelBuffer {
         var buffer: CVPixelBuffer?
         let result = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
                                         [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buffer)
@@ -619,6 +624,20 @@ final class CallIntegrationTests: XCTestCase {
         }
         context.setFillColor(CGColor(gray: includeTextPattern ? 0.04 : 0, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        if includeCameraPattern {
+            // Distributed spatial detail and changing color provide encoder
+            // work across every layer, unlike a black frame with one tiny marker.
+            for y in stride(from: 0, to: height, by: 32) {
+                for x in stride(from: 0, to: width, by: 32) {
+                    context.setFillColor(CGColor(
+                        red: CGFloat((x / 32 * 37 + phase * 3) % 256) / 255,
+                        green: CGFloat((y / 32 * 67 + phase * 5) % 256) / 255,
+                        blue: CGFloat(((x + y) / 32 * 29 + phase * 7) % 256) / 255,
+                        alpha: 1))
+                    context.fill(CGRect(x: x, y: y, width: 32, height: 32))
+                }
+            }
+        }
         if includeTextPattern {
             for (index, size) in [12, 16, 20, 24].enumerated() {
                 let label = "PAIRWISE \(size)PX SAMPLE 0123456789"
