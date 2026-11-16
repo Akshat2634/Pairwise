@@ -18,6 +18,9 @@ public:
   void leave();
   void microphone(bool enabled);
   void devices(const QString &input = {}, const QString &output = {});
+  void startMicrophoneTest(const QString &deviceId);
+  void stopMicrophoneTest();
+  int microphoneTestLevel() const;
   void refreshParticipants();
   void video(bool screen, const QImage &image);
   void stopVideo(bool screen);
@@ -32,6 +35,7 @@ signals:
   void error(const QString &text);
   void microphoneChanged(bool enabled);
   void audioDevices(const QJsonArray &inputs, const QJsonArray &outputs);
+  void microphoneTestState(bool running, const QString &error);
   void packet(const QString &topic, const QJsonObject &message,
               const QString &sender);
   void frame(const QString &identity, const QString &name, bool screen,

@@ -1,7 +1,6 @@
 #include "MainWindow.h"
 #include "Platform.h"
 #include <QApplication>
-#include <QAudioSource>
 #include <QCameraDevice>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -700,6 +699,7 @@ void MainWindow::settings() {
             populate(output, outs, "speaker");
           });
   connect(input, &QComboBox::activated, &dialog, [this, input] {
+    media.stopMicrophoneTest();
     preferences.setValue("microphone", input->currentData());
     media.devices(input->currentData().toString(), {});
   });
@@ -730,44 +730,82 @@ void MainWindow::settings() {
             if (d.id() == cameras->currentData().toByteArray())
               previewCapture.startCamera(d, true);
       });
-  testCamera->setEnabled(!session.connected && cameras->count() > 0);
+  auto localTestsAvailable = [this] {
+    return !session.connected && session.roomId.isEmpty() &&
+           session.connectingRoom.isEmpty();
+  };
+  testCamera->setEnabled(localTestsAvailable() && cameras->count() > 0);
   auto meter = new QProgressBar;
   meter->setRange(0, 100);
   meter->setAccessibleName("Local microphone level");
   layout->addWidget(meter);
-  std::unique_ptr<QAudioSource> testAudio;
-  auto testMic = button(
-      "Start / stop local microphone test", layout, &dialog,
-      [&testAudio, meter, &dialog] {
-        if (testAudio) {
-          testAudio->stop();
-          testAudio.reset();
-          meter->setValue(0);
-          return;
-        }
-        auto device = QMediaDevices::defaultAudioInput();
-        if (device.isNull())
-          return;
-        auto format = device.preferredFormat();
-        testAudio = std::make_unique<QAudioSource>(device, format);
-        auto io = testAudio->start();
-        if (!io)
-          return;
-        QObject::connect(
-            io, &QIODevice::readyRead, &dialog, [io, format, meter] {
-              auto bytes = io->readAll();
-              float peak = 0;
-              for (qsizetype i = 0; i + format.bytesPerSample() <= bytes.size();
-                   i += format.bytesPerSample())
-                peak = qMax(peak, std::abs(format.normalizedSampleValue(
-                                      bytes.constData() + i)));
-              meter->setValue(int(peak * 100));
-            });
-      });
-  testMic->setEnabled(!session.connected);
-  layout->addWidget(
-      new QLabel("Microphone test measures the system default input locally. "
-                 "Tests stop when Settings closes."));
+  bool testingMicrophone = false, startingMicrophone = false;
+  auto testDescription = new QLabel(
+      "Test the selected microphone locally. No test audio is sent to a call. "
+      "Tests stop when Settings closes or a call starts.");
+  testDescription->setWordWrap(true);
+  testDescription->setTextFormat(Qt::PlainText);
+  QTimer meterTimer;
+  meterTimer.setInterval(100);
+  connect(&meterTimer, &QTimer::timeout, &dialog,
+          [this, meter] { meter->setValue(media.microphoneTestLevel()); });
+  auto testMic =
+      button("Start selected microphone test", layout, &dialog,
+             [this, input, &testingMicrophone, &startingMicrophone] {
+               if (testingMicrophone || startingMicrophone) {
+                 media.stopMicrophoneTest();
+                 return;
+               }
+               startingMicrophone = true;
+               media.startMicrophoneTest(input->currentData().toString());
+             });
+  testMic->setEnabled(false);
+  connect(&media, &Media::audioDevices, &dialog,
+          [localTestsAvailable, testMic](const QJsonArray &inputs,
+                                         const QJsonArray &) {
+            testMic->setEnabled(localTestsAvailable() && !inputs.isEmpty());
+          });
+  connect(&media, &Media::microphoneTestState, &dialog,
+          [localTestsAvailable, &testingMicrophone, &startingMicrophone,
+           &meterTimer, testMic, testDescription, meter,
+           input](bool running, const QString &error) {
+            testingMicrophone = running;
+            startingMicrophone = false;
+            testMic->setText(running ? "Stop microphone test"
+                                     : "Start selected microphone test");
+            testMic->setEnabled(running ||
+                                (localTestsAvailable() && input->count() > 0));
+            if (running) {
+              testDescription->setText(
+                  "Testing the selected microphone locally. "
+                  "No audio is sent to a call.");
+              meterTimer.start();
+            } else {
+              meterTimer.stop();
+              meter->setValue(0);
+              testDescription->setText(
+                  error.isEmpty() ? "Microphone test is off. Tests stop "
+                                    "when Settings closes or a call starts."
+                                  : error);
+            }
+          });
+  bool testsWereAvailable = localTestsAvailable();
+  connect(&session, &CallSession::changed, &dialog,
+          [this, localTestsAvailable, &testsWereAvailable, &previewCapture,
+           testCamera, testMic, cameras, input, &testingMicrophone,
+           &startingMicrophone] {
+            const bool available = localTestsAvailable();
+            if (testsWereAvailable && !available) {
+              previewCapture.stopCamera();
+              media.stopMicrophoneTest();
+            }
+            testsWereAvailable = available;
+            testCamera->setEnabled(available && cameras->count() > 0);
+            testMic->setEnabled(available &&
+                                (testingMicrophone || startingMicrophone ||
+                                 input->count() > 0));
+          });
+  layout->addWidget(testDescription);
   button("Export diagnostics", layout, &dialog, [this] { diagnostic(); });
 #ifdef Q_OS_WIN
   button("Open Windows microphone privacy", layout, &dialog, [] {
@@ -780,8 +818,7 @@ void MainWindow::settings() {
   layout->addWidget(close);
   connect(close, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   dialog.exec();
-  if (testAudio)
-    testAudio->stop();
+  media.stopMicrophoneTest();
   previewCapture.stopCamera();
 }
 void MainWindow::diagnostic() {

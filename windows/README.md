@@ -46,8 +46,9 @@ build/stage/Pairwise.exe
 
 Sign in against an existing team HTTPS server. HTTP/WS are accepted only for loopback development.
 Microphone and camera start off; enable them explicitly during a call. Settings includes local microphone
-level and camera preview tests; closing Settings stops them. The microphone test currently tests the
-system default input; the actual call uses the selected LiveKit device.
+level and camera preview tests; closing Settings or starting a call stops them. The microphone test
+uses the selected LiveKit device and an unpublished local track. Its bounded PCM stream stays local;
+no room, server connection or audio publication is created for the test.
 
 Select teammates to call/invite, or request to join an active call. Incoming calls provide Accept/Decline;
 join approvals are under Join requests. A failed media join can be retried explicitly from an accepted call

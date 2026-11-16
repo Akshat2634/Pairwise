@@ -3,8 +3,11 @@
 #include <QJsonDocument>
 #include <QMutex>
 #include <QTimer>
+#include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <livekit/livekit.h>
+#include <thread>
 
 namespace pairwise {
 class MediaWorker : public QObject, public livekit::RoomDelegate {
@@ -30,7 +33,97 @@ public:
   QImage outgoing[2];
   quint64 outgoingGeneration[2] = {0, 0};
   bool suspended = false;
+  std::atomic<quint64> testRequest = 0;
+  std::atomic<int> testPeak = 0;
+  std::unique_ptr<livekit::PlatformAudio> testAudio;
+  std::shared_ptr<livekit::PlatformAudioSource> testSource;
+  std::shared_ptr<livekit::LocalAudioTrack> testTrack;
+  std::shared_ptr<livekit::AudioStream> testStream;
+  std::thread testReader;
+  void stopTest(bool notify = true) {
+    if (testStream)
+      testStream
+          ->close(); // Wakes a reader even when the device is silent/gone.
+    if (testReader.joinable())
+      testReader.join();
+    testStream.reset();
+    testTrack.reset();
+    testSource.reset();
+    testAudio.reset();
+    testPeak = 0;
+    if (notify)
+      emit testState(testRequest.load(), false, {});
+  }
+  void startTest(quint64 request, const QString &deviceId) {
+    stopTest(false);
+    if (request != testRequest.load())
+      return;
+    try {
+      if (room)
+        throw std::runtime_error("call is active");
+      testAudio = std::make_unique<livekit::PlatformAudio>();
+      if (!deviceId.isEmpty()) {
+        const auto devices = testAudio->recordingDevices();
+        if (std::none_of(devices.begin(), devices.end(),
+                         [&](const auto &device) {
+                           return device.id == deviceId.toStdString();
+                         }))
+          throw std::runtime_error("selected device is unavailable");
+        testAudio->setRecordingDevice(deviceId.toStdString());
+      }
+      if (request != testRequest.load()) {
+        stopTest();
+        return;
+      }
+      testSource = testAudio->createAudioSource();
+      testTrack = livekit::LocalAudioTrack::createLocalAudioTrack(
+          "local-microphone-test", testSource);
+      livekit::AudioStream::Options options;
+      options.capacity = 4;
+      testStream = livekit::AudioStream::fromTrack(testTrack, options);
+      if (request != testRequest.load()) {
+        stopTest();
+        return;
+      }
+      // This local track is never published or attached to a room.
+      testReader = std::thread([this, stream = testStream, request] {
+        try {
+          livekit::AudioFrameEvent event;
+          while (stream->read(event)) {
+            if (request != testRequest.load())
+              break;
+            int peak = 0;
+            for (auto sample : event.frame.data())
+              peak = std::max(peak, std::abs(int(sample)));
+            peak = std::min(100, peak * 100 / 32768);
+            int previous = testPeak.load();
+            while (peak > previous &&
+                   !testPeak.compare_exchange_weak(previous, peak)) {
+            }
+          }
+        } catch (const std::exception &) {
+          // Device removal/errors must stop capture rather than terminate the
+          // app.
+        }
+        QMetaObject::invokeMethod(this, [this, request] {
+          if (request != testRequest.load())
+            return;
+          stopTest(false);
+          emit testState(
+              request, false,
+              "Microphone test stopped. Refresh devices and try again.");
+        });
+      });
+      emit testState(request, true, {});
+    } catch (const std::exception &) {
+      stopTest(false);
+      emit testState(request, false,
+                     "The selected microphone could not be tested. Refresh "
+                     "devices and check Windows microphone privacy settings.");
+    }
+  }
   void close() {
+    stopTest();
     suspended = true;
     if (room) {
       room->setDelegate(nullptr);
@@ -290,6 +383,7 @@ signals:
   void failed(quint64 generation, const QString &text, bool fatal);
   void micState(quint64 generation, bool enabled);
   void deviceList(QJsonArray inputs, QJsonArray outputs);
+  void testState(quint64 request, bool running, QString error);
   void framesAvailable();
   void gone(quint64 generation, QString id, QString name, bool screen);
   void departed(quint64 generation, QString id);
@@ -329,6 +423,11 @@ Media::Media(QObject *parent) : QObject(parent), worker(new MediaWorker) {
       emit microphoneChanged(on);
   });
   connect(worker, &MediaWorker::deviceList, this, &Media::audioDevices);
+  connect(worker, &MediaWorker::testState, this,
+          [this](quint64 request, bool running, const QString &error) {
+            if (request == worker->testRequest.load())
+              emit microphoneTestState(running, error);
+          });
   connect(worker, &MediaWorker::subscribed, this,
           [this](quint64 n, QString id, QString name) {
             if (n == generation && active)
@@ -380,12 +479,14 @@ Media::Media(QObject *parent) : QObject(parent), worker(new MediaWorker) {
   });
 }
 Media::~Media() {
+  ++worker->testRequest;
   QMetaObject::invokeMethod(
       worker, [this] { worker->close(); }, Qt::BlockingQueuedConnection);
   thread.quit();
   thread.wait();
 }
 void Media::join(const QString &url, const QString &token) {
+  stopMicrophoneTest();
   active = true;
   auto n = ++generation;
   QMetaObject::invokeMethod(worker, [=, this] { worker->join(n, url, token); });
@@ -395,6 +496,7 @@ void Media::refreshParticipants() {
     QMetaObject::invokeMethod(worker, [this] { worker->participants(); });
 }
 void Media::leave() {
+  stopMicrophoneTest();
   active = false;
   ++generation;
   remoteTracks.clear();
@@ -410,6 +512,22 @@ void Media::devices(const QString &input, const QString &output) {
   QMetaObject::invokeMethod(worker,
                             [=, this] { worker->enumerate(input, output); });
 }
+void Media::startMicrophoneTest(const QString &deviceId) {
+  if (active) {
+    emit microphoneTestState(false,
+                             "Leave the call before testing a microphone.");
+    return;
+  }
+  const auto request = ++worker->testRequest;
+  QMetaObject::invokeMethod(worker, [this, request, deviceId] {
+    worker->startTest(request, deviceId);
+  });
+}
+void Media::stopMicrophoneTest() {
+  ++worker->testRequest;
+  QMetaObject::invokeMethod(worker, [this] { worker->stopTest(); });
+}
+int Media::microphoneTestLevel() const { return worker->testPeak.exchange(0); }
 void Media::video(bool screen, const QImage &image) {
   if (!active)
     return;

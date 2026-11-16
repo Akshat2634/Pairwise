@@ -39,7 +39,7 @@ jobs:
           cmake --build build/windows --config Release --parallel 4
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Test API lifecycle and macOS wire compatibility
-        run: ctest --test-dir build/windows -C Release --output-on-failure
+        run: ctest --test-dir build/windows -C Release --verbose
       - name: Build isolated Pairwise API for native end-to-end test
         working-directory: server
         run: go build -o ../build/windows/pairwise-api.exe ./cmd/pairdesk-api
