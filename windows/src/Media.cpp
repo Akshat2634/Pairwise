@@ -25,6 +25,8 @@ public:
   };
   QMutex frameLock;
   QMap<QString, Frame> received;
+  bool frameDeliveryQueued = false;
+  std::string screenName = "pairdesk.screen.display";
   QImage outgoing[2];
   quint64 outgoingGeneration[2] = {0, 0};
   bool suspended = false;
@@ -165,7 +167,7 @@ public:
           sources[i] = std::make_shared<livekit::VideoSource>(image.width(),
                                                               image.height());
           videos[i] = livekit::LocalVideoTrack::createLocalVideoTrack(
-              i ? "PairDesk display" : "camera", sources[i]);
+              i ? screenName : "camera", sources[i]);
           livekit::TrackPublishOptions o;
           o.source = i ? livekit::TrackSource::SOURCE_SCREENSHARE
                        : livekit::TrackSource::SOURCE_CAMERA;
@@ -196,13 +198,11 @@ public:
         emit videoFailed(generation, i == 1);
       }
     }
-    QMap<QString, Frame> batch;
-    {
-      QMutexLocker lock(&frameLock);
-      batch.swap(received);
+    QMutexLocker lock(&frameLock);
+    if (!received.isEmpty() && !frameDeliveryQueued) {
+      frameDeliveryQueued = true;
+      emit framesAvailable();
     }
-    for (const auto &f : batch)
-      emit imageReady(f.generation, f.identity, f.name, f.screen, f.image);
   }
   void onTrackSubscribed(livekit::Room &r,
                          const livekit::TrackSubscribedEvent &event) override {
@@ -289,8 +289,7 @@ signals:
   void failed(quint64 generation, const QString &text, bool fatal);
   void micState(quint64 generation, bool enabled);
   void deviceList(QJsonArray inputs, QJsonArray outputs);
-  void imageReady(quint64 generation, QString id, QString name, bool screen,
-                  QImage image);
+  void framesAvailable();
   void gone(quint64 generation, QString id, QString name, bool screen);
   void departed(quint64 generation, QString id);
   void arrived(quint64 generation, QString id);
@@ -334,12 +333,18 @@ Media::Media(QObject *parent) : QObject(parent), worker(new MediaWorker) {
             if (n == generation && active)
               remoteTracks.insert(id + "/" + name);
           });
-  connect(
-      worker, &MediaWorker::imageReady, this,
-      [this](quint64 n, QString id, QString name, bool screen, QImage image) {
-        if (n == generation && active && remoteTracks.contains(id + "/" + name))
-          emit frame(id, name, screen, image);
-      });
+  connect(worker, &MediaWorker::framesAvailable, this, [this] {
+    QMap<QString, MediaWorker::Frame> batch;
+    {
+      QMutexLocker lock(&worker->frameLock);
+      batch.swap(worker->received);
+      worker->frameDeliveryQueued = false;
+    }
+    for (const auto &f : batch)
+      if (f.generation == generation && active &&
+          remoteTracks.contains(f.identity + "/" + f.name))
+        emit frame(f.identity, f.name, f.screen, f.image);
+  });
   connect(worker, &MediaWorker::gone, this,
           [this](quint64 n, QString id, QString name, bool screen) {
             if (n == generation && active) {
@@ -410,6 +415,12 @@ void Media::video(bool screen, const QImage &image) {
   QMutexLocker lock(&worker->frameLock);
   worker->outgoing[screen ? 1 : 0] = image;
   worker->outgoingGeneration[screen ? 1 : 0] = generation;
+}
+void Media::screenSource(bool window) {
+  QMetaObject::invokeMethod(worker, [this, window] {
+    worker->screenName =
+        window ? "pairdesk.screen.window" : "pairdesk.screen.display";
+  });
 }
 void Media::stopVideo(bool screen) {
   QMetaObject::invokeMethod(worker, [this, screen] {

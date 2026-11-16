@@ -21,6 +21,7 @@ public:
   void refreshParticipants();
   void video(bool screen, const QImage &image);
   void stopVideo(bool screen);
+  void screenSource(bool window);
   void send(const QString &topic, const QJsonObject &packet,
             const QString &recipient, bool reliable = true);
 signals:

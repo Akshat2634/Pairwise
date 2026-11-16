@@ -586,6 +586,7 @@ void MainWindow::share() {
   session.share(true, [this, screens, windows, index](bool allowed) {
     if (!allowed)
       return;
+    media.screenSource(index >= screens.size());
     if (index < screens.size()) {
       // The display may have been unplugged while the API request was in
       // flight.
