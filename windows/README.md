@@ -40,6 +40,7 @@ cmake --build build/windows --config Release --parallel 4
 ctest --test-dir build/windows -C Release --output-on-failure
 cmake --install build/windows --config Release --prefix build/stage
 windeployqt --release --compiler-runtime --no-translations build/stage/Pairwise.exe
+./windows/packaging/stage-runtime.ps1 -Stage build/stage
 build/stage/Pairwise.exe
 ```
 
@@ -77,7 +78,9 @@ or approved request. Historical approvals never reconnect automatically.
 ## Installer, updates, and release gates
 
 `packaging/package.ps1` uses Windows SDK MakeAppx validation and builds an x64 MSIX. The minimum OS is embedded
-in the package manifest. For release, pass the subject of the actual publisher certificate as `-Publisher`
+in the package manifest. `stage-runtime.ps1` copies the Visual Studio 2022 x64 redistributable CRT DLLs
+into the app directory; packaging refuses missing CRT, Qt, capture-plugin or LiveKit runtime files.
+For release, pass the subject of the actual publisher certificate as `-Publisher`
 and an installed certificate thumbprint as `-CertificateThumbprint`. Signing and timestamping must succeed,
 and SignTool verifies the result. The script accepts no private key/password arguments.
 

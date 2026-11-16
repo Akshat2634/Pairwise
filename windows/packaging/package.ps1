@@ -9,6 +9,9 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'Use a four-part numeric MSIX version.' }
 if (!(Test-Path "$Stage/Pairwise.exe")) { throw 'Missing staged executable.' }
+foreach ($name in @('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll','livekit.dll','livekit_ffi.dll','Qt6Core.dll','platforms/qwindows.dll','multimedia/ffmpegmediaplugin.dll')) {
+    if (!(Test-Path "$Stage/$name")) { throw "Required runtime file missing: $name. Run windeployqt and stage-runtime.ps1 before packaging." }
+}
 New-Item -ItemType Directory -Force $Output | Out-Null
 $Stage = (Resolve-Path $Stage).Path
 $Output = (Resolve-Path $Output).Path

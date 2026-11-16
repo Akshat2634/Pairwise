@@ -43,6 +43,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           windeployqt --release --compiler-runtime --no-translations build/stage/Pairwise.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./windows/packaging/stage-runtime.ps1 -Stage build/stage
           Copy-Item LICENSE build/stage/LICENSE.txt
           Copy-Item THIRD_PARTY_NOTICES.md build/stage/THIRD_PARTY_NOTICES.md
           Copy-Item -Recurse .cache/livekit/livekit-sdk-windows-x64-1.13.1/share build/stage/livekit-notices
