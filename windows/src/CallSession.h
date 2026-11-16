@@ -16,6 +16,7 @@ public:
   void logout();
   void call(const QString &userId);
   void answer(const QString &callId, bool accept);
+  void cancelCall(const QString &callId);
   void requestJoin(const QString &roomId);
   void resolveJoin(const QString &id, bool accept);
   void cancelRequest(const QString &id);

@@ -4,8 +4,10 @@
 #include <QWidget>
 #include <cmath>
 #ifdef Q_OS_WIN
-#include <wincred.h>
+// clang-format off: wincred.h requires Windows types to be declared first.
 #include <windows.h>
+#include <wincred.h>
+// clang-format on
 #endif
 
 namespace pairwise {

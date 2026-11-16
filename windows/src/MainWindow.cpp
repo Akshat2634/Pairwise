@@ -142,10 +142,14 @@ MainWindow::MainWindow()
       else if (c["status"] == "accepted")
         session.joinRoom(c["room"].toObject()["id"].toString());
     });
-    button("Decline", bar, this, [this] {
+    button("Decline / cancel", bar, this, [this] {
       auto c = selected(history);
-      if (c["status"] == "pending")
-        session.answer(c["id"].toString(), false);
+      if (c["status"] == "pending") {
+        if (c["caller"].toObject()["id"] == session.user["id"])
+          session.cancelCall(c["id"].toString());
+        else
+          session.answer(c["id"].toString(), false);
+      }
     });
     button("Call back", bar, this, [this] {
       auto c = selected(history);
@@ -500,7 +504,7 @@ void MainWindow::refresh() {
   fill(team, rows);
   rows.clear();
   QSet<QString> pending;
-  for (qsizetype i = session.calls.size(); i-- > 0;) {
+  for (qsizetype i = 0; i < session.calls.size(); ++i) {
     auto c = session.calls[i].toObject();
     bool incoming = c["target"].toObject()["id"] == session.user["id"];
     auto other = c[incoming ? "caller" : "target"].toObject();

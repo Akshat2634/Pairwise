@@ -42,5 +42,6 @@ private:
   std::unique_ptr<QWidget> border;
   QRect physicalBounds;
   bool previewOnly = false, stopping = false;
+  quint64 cameraGeneration = 0;
 };
 } // namespace pairwise

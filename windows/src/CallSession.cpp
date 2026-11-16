@@ -137,12 +137,19 @@ void CallSession::call(const QString &userId) {
   });
 }
 void CallSession::answer(const QString &id, bool accept) {
+  if (accept && (!roomId.isEmpty() || !connectingRoom.isEmpty())) {
+    emit error("Leave the current call before accepting another call.");
+    return;
+  }
   action("/v1/calls/" + id + (accept ? "/accept" : "/decline"), {},
          [this, accept](QJsonObject r) {
            if (accept)
              joinRoom(r["call"].toObject()["room"].toObject()["id"].toString());
            poll();
          });
+}
+void CallSession::cancelCall(const QString &id) {
+  action("/v1/calls/" + id + "/cancel", {}, [this](QJsonObject) { poll(); });
 }
 void CallSession::requestJoin(const QString &id) {
   if (!roomId.isEmpty() || !connectingRoom.isEmpty())

@@ -43,11 +43,16 @@ void Capture::startCamera(const QCameraDevice &device, bool preview) {
   }
   previewOnly = preview;
   camera = std::make_unique<QCamera>(device);
-  connect(camera.get(), &QCamera::errorOccurred, this,
-          [this](auto, const QString &text) {
-            stopCamera();
-            emit error("Camera stopped: " + text);
-          });
+  const auto current = cameraGeneration;
+  connect(
+      camera.get(), &QCamera::errorOccurred, this,
+      [this, current](auto, const QString &text) {
+        if (current != cameraGeneration)
+          return;
+        stopCamera();
+        emit error("Camera stopped: " + text);
+      },
+      Qt::QueuedConnection);
   connect(camera.get(), &QCamera::activeChanged, this,
           [this] { emit changed(); });
   cameraSession.setCamera(camera.get());
@@ -55,6 +60,7 @@ void Capture::startCamera(const QCameraDevice &device, bool preview) {
   emit changed();
 }
 void Capture::stopCamera() {
+  ++cameraGeneration;
   if (camera) {
     camera->stop();
     cameraSession.setCamera(nullptr);
@@ -79,6 +85,7 @@ bool Capture::shareScreen(QScreen *target) {
                    Qt::WindowTransparentForInput |
                    Qt::WindowDoesNotAcceptFocus);
   border->setAttribute(Qt::WA_TranslucentBackground);
+  border->setAttribute(Qt::WA_StyledBackground);
   border->setAttribute(Qt::WA_ShowWithoutActivating);
   border->setStyleSheet("background: transparent; border: 3px solid #4e8cff;");
   border->setGeometry(target->geometry());
