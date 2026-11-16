@@ -42,9 +42,11 @@ if ($LASTEXITCODE) { throw 'MSIX validation/packaging failed.' }
 if ($CertificateThumbprint) {
     # Signing uses a certificate already installed in the Windows user store;
     # no private key or password is accepted as an argument or written to disk.
-    & "$tools/signtool.exe" sign /sha1 $CertificateThumbprint /fd SHA256 /tr 'https://timestamp.digicert.com' /td SHA256 $package
+    # DigiCert's documented RFC 3161 endpoint; SignTool on the supported SDK
+    # rejects the HTTPS URL. The returned timestamp is cryptographically verified.
+    & "$tools/signtool.exe" sign /sha1 $CertificateThumbprint /fd SHA256 /tr 'http://timestamp.digicert.com' /td SHA256 $package
     if ($LASTEXITCODE) { throw 'MSIX signing failed.' }
-    & "$tools/signtool.exe" verify /pa /v $package
+    & "$tools/signtool.exe" verify /pa /v /tw $package
     if ($LASTEXITCODE) { throw 'MSIX signature verification failed.' }
 } elseif ($UpdateBaseUrl) { throw 'An update feed requires a signed MSIX.' }
 if ($UpdateBaseUrl) {
