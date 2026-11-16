@@ -10,6 +10,7 @@ import hmac
 import json
 import os
 import pathlib
+import re
 import socket
 import subprocess
 import tempfile
@@ -66,6 +67,7 @@ def run(executable, server, api_executable):
         heartbeat_stop = threading.Event()
         heartbeat_thread = None
         heartbeat_errors = []
+        failed = False
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         api_url = "http://127.0.0.1:18089"
 
@@ -146,6 +148,9 @@ def run(executable, server, api_executable):
                     else:
                         raise RuntimeError("API logout did not revoke its session")
                 print("Real API sharing, call completion/history and session revocation verified.")
+        except Exception:
+            failed = True
+            raise
         finally:
             heartbeat_stop.set()
             if heartbeat_thread:
@@ -154,6 +159,24 @@ def run(executable, server, api_executable):
                 stop(process)
             for log in logs:
                 log.close()
+            if failed:
+                # Only disposable synthetic services run here. Preserve failure
+                # evidence before TemporaryDirectory deletes the server logs.
+                destination = os.environ.get("PAIRWISE_TEST_LOG_DIR")
+                if destination:
+                    destination = pathlib.Path(destination)
+                    destination.mkdir(parents=True, exist_ok=True)
+                for name in ("api.log", "livekit.log"):
+                    path = directory / name
+                    if not path.exists():
+                        continue
+                    content = path.read_text(encoding="utf-8", errors="replace")
+                    content = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[redacted JWT]", content)
+                    content = re.sub(r"(?i)Bearer\s+\S+", "Bearer [redacted]", content)
+                    if destination:
+                        (destination / name).write_text(content, encoding="utf-8")
+                    print("Synthetic service failure log:", name, flush=True)
+                    print("\n".join(content.splitlines()[-60:]), flush=True)
 
 
 if __name__ == "__main__":
