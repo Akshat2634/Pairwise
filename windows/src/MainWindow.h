@@ -49,7 +49,7 @@ private:
   QMap<QString, QLabel *> cameraTiles;
   QWidget *cameraRow;
   QString sharer;
-  bool micEnabled = false, shuttingDown = false;
+  bool micEnabled = false, shuttingDown = false, stopShortcutAvailable = false;
   QSet<QString> notified;
   QMap<QString, QPointer<QDialog>> prompts;
 };

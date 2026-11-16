@@ -63,6 +63,7 @@ or approved request. Historical approvals never reconnect automatically.
   lease. The active controller is visible in the call. Stop all remote control, Ctrl+Alt+Escape, lease expiry,
   participant departure, share stop, reconnect, admission loss, window close and logout revoke input and release
   held keys/buttons. Escape or loss of focus releases viewer control. Window sharing remains view only.
+  If Windows cannot reserve the global stop shortcut, hosting remote input is disabled and the call shows why.
 - Input is authenticated by LiveKit participant identity; identities in JSON are never trusted for injection.
   Epochs, separate reliable/pointer sequence high-water marks, bounded coordinates and message sizes reject stale
   or malformed events. Cursor hover is lossy presence and does not move the owner's system pointer.

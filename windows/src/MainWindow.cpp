@@ -394,6 +394,13 @@ MainWindow::MainWindow()
   connect(
       &collaboration, &Collaboration::controlRequested, this,
       [this](const QString &id) {
+        if (!stopShortcutAvailable) {
+          collaboration.deny(id);
+          showError("Windows could not reserve Ctrl+Alt+Escape. Remote input "
+                    "hosting is disabled until the shortcut is available and "
+                    "Pairwise is restarted.");
+          return;
+        }
         auto prompt = new QMessageBox(
             QMessageBox::Question, "Remote control request",
             name(id) + " wants to control your shared display. Allow mouse, "
@@ -412,8 +419,9 @@ MainWindow::MainWindow()
       });
   qApp->installNativeEventFilter(this);
 #ifdef Q_OS_WIN
-  RegisterHotKey(reinterpret_cast<HWND>(winId()), 0x5041,
-                 MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_ESCAPE);
+  stopShortcutAvailable =
+      RegisterHotKey(reinterpret_cast<HWND>(winId()), 0x5041,
+                     MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_ESCAPE);
 #endif
   refresh();
   const auto savedServer = preferences.value("server").toString();
@@ -430,7 +438,8 @@ MainWindow::~MainWindow() {
   disconnect(&collaboration, nullptr, this, nullptr);
   qApp->removeNativeEventFilter(this);
 #ifdef Q_OS_WIN
-  UnregisterHotKey(reinterpret_cast<HWND>(winId()), 0x5041);
+  if (stopShortcutAvailable)
+    UnregisterHotKey(reinterpret_cast<HWND>(winId()), 0x5041);
 #endif
   resetMedia();
 }
@@ -511,7 +520,10 @@ void MainWindow::refresh() {
       : collaboration.controlling()
           ? "You control the shared display. Click it to type. Escape releases "
             "control."
-          : "Remote control is off. Ctrl+Alt+Escape stops all remote input.");
+      : stopShortcutAvailable
+          ? "Remote control is off. Ctrl+Alt+Escape stops all remote input."
+          : "Global control-stop shortcut unavailable. Hosting remote input "
+            "is disabled. Escape releases viewer control.");
   QList<QPair<QString, QJsonObject>> rows;
   for (const auto &v : session.users) {
     auto u = v.toObject();
