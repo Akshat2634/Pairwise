@@ -9,6 +9,28 @@ import Vision
 
 final class CallIntegrationTests: XCTestCase {
     @MainActor
+    func testCameraBenchmarkReportsCurrentDecodedResolutionAfterLayerSwitch() throws {
+        let received = expectation(description: "Synthetic camera frame received")
+        let receiver = SyntheticVideoReceiver(expectation: received, source: .camera)
+        func frame(width: Int, height: Int) throws -> VideoFrame {
+            let pixels = try syntheticPixelBuffer(width: width, height: height, phase: 0)
+            return VideoFrame(dimensions: Dimensions(width: Int32(width), height: Int32(height)),
+                              rotation: ._0, timeStampNs: 0,
+                              buffer: CVPixelVideoBuffer(pixelBuffer: pixels))
+        }
+        receiver.render(frame: try frame(width: 1920, height: 1080))
+        receiver.render(frame: try frame(width: 320, height: 180))
+        var snapshot = try XCTUnwrap(receiver.snapshot())
+        XCTAssertEqual(snapshot.width, 320, "A startup high layer must not mask a later thumbnail layer")
+        XCTAssertEqual(snapshot.height, 180)
+        receiver.render(frame: try frame(width: 640, height: 360))
+        snapshot = try XCTUnwrap(receiver.snapshot())
+        XCTAssertEqual(snapshot.width, 640)
+        XCTAssertEqual(snapshot.height, 360)
+        wait(for: [received], timeout: 1)
+    }
+
+    @MainActor
     func testOneToOneSyntheticScreenQualityProfile() async throws {
         guard let address = ProcessInfo.processInfo.environment["PAIRDESK_TEST_API"],
               let password = ProcessInfo.processInfo.environment["PAIRDESK_TEST_PASSWORD"] else {
@@ -614,7 +636,11 @@ private final class SyntheticVideoReceiver: NSObject, RoomDelegate, VideoRendere
         }
         let width = Int(frame.dimensions.width)
         let height = Int(frame.dimensions.height)
-        if measuredWidth == nil || width * height > measuredWidth! * measuredHeight! {
+        // Camera subscriptions can start at the high layer before a view's
+        // preferred dimensions arrive. Report the current decoded layer rather
+        // than retaining that startup maximum for every camera view size.
+        let cameraLayerChanged = source == .camera && (measuredWidth != width || measuredHeight != height)
+        if measuredWidth == nil || cameraLayerChanged || width * height > measuredWidth! * measuredHeight! {
             measuredWidth = width
             measuredHeight = height
             firstFrame = frame.toCVPixelBuffer()
