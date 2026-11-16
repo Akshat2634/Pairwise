@@ -9,7 +9,7 @@ peer app commit/version, API/LiveKit versions, network conditions and measured o
 | Area | Automated evidence / implementation | Required physical evidence |
 | --- | --- | --- |
 | Transport/UI spike | Compiles with official pinned C++ SDK and Qt; Windows CI build | Compare frame latency, CPU/GPU, memory, idle use, startup, and capture reliability before final stack selection |
-| Accounts/API | Fake HTTP tests for sign-in, admission, leave, approval timing and logout races | Real server sign-in, expiry, invalid credentials, HTTPS trust, disabled account and sign-out |
+| Accounts/API | Fake HTTP lifecycle/race tests plus disposable real Go API signup, direct-call acceptance, room admission/heartbeat, share permission, call history and session revocation with native LiveKit media | Real deployment sign-in, expiry, invalid credentials, HTTPS trust, disabled account and sign-out |
 | Calls | Direct/group invitation and approval endpoints; historical approvals cannot autojoin | Win–Win and Win–Mac accept/decline/cancel, ring expiry, four-person limit, caller departure, missed-call alerts |
 | Voice | Native LiveKit platform audio and device IDs | Bidirectional voice, echo cancellation, mute, default-route changes, Bluetooth/USB hot-plug, local tests |
 | Camera | Native Qt camera source, preview and bounded frame pipeline | Both directions, permission denied/regranted, device unplug, selection, group gallery |

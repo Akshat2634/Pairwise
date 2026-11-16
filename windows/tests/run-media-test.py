@@ -83,7 +83,8 @@ def run(executable, server, api_executable):
             log = (directory / "livekit.log").open("wb"); logs.append(log)
             media = subprocess.Popen([str(server), "--dev", "--bind", "127.0.0.1", "--node-ip", "127.0.0.1", "--port", "17890"], stdout=log, stderr=subprocess.STDOUT)
             processes.append(media); ready(media, 17890)
-            env = os.environ.copy()
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("PAIRWISE_API_", "PAIRWISE_MEDIA_"))}
             env.update(PAIRWISE_MEDIA_TEST_URL="ws://127.0.0.1:17890", PAIRWISE_MEDIA_SENDER_TOKEN=token("sender"), PAIRWISE_MEDIA_RECEIVER_TOKEN=token("receiver"))
             sessions = []
             room_id = None

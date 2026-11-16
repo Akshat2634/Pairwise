@@ -71,7 +71,10 @@ MainWindow::MainWindow()
   header->addWidget(brand);
   header->addStretch();
   button("Settings", header, this, [this] { settings(); });
-  button("Sign out", header, this, [this] { session.logout(); });
+  auto signOut = button("Sign out", header, this, [this] { session.logout(); });
+  signOut->hide();
+  connect(&session, &CallSession::changed, signOut,
+          [this, signOut] { signOut->setVisible(session.signedIn); });
   layout->addLayout(header);
   notice = new QLabel;
   notice->setWordWrap(true);
@@ -83,11 +86,25 @@ MainWindow::MainWindow()
   auto login = new QWidget;
   auto loginLayout = new QVBoxLayout(login);
   loginLayout->addStretch();
+  auto loginRow = new QHBoxLayout;
+  loginRow->addStretch();
+  auto loginPanel = new QWidget;
+  loginPanel->setMaximumWidth(480);
+  loginPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+  auto loginForm = new QVBoxLayout(loginPanel);
+  auto loginTitle = new QLabel("Sign in to your team");
+  loginTitle->setStyleSheet("font-size:20px;font-weight:600;");
+  loginForm->addWidget(loginTitle);
+  auto loginHelp = new QLabel("Use an account from your team administrator.");
+  loginHelp->setWordWrap(true);
+  loginForm->addWidget(loginHelp);
+  loginForm->addSpacing(12);
   auto form = new QFormLayout;
   server = new QLineEdit(preferences.value("server").toString());
   server->setPlaceholderText("https://your-team-server");
   server->setAccessibleName("Team server");
   email = new QLineEdit;
+  email->setPlaceholderText("you@your-team.com");
   email->setAccessibleName("Email");
   password = new QLineEdit;
   password->setEchoMode(QLineEdit::Password);
@@ -95,16 +112,17 @@ MainWindow::MainWindow()
   form->addRow("Team server", server);
   form->addRow("Email", email);
   form->addRow("Password", password);
-  loginLayout->addLayout(form);
-  signIn = button("Sign in", loginLayout, this, [this] {
+  loginForm->addLayout(form);
+  signIn = button("Sign in", loginForm, this, [this] {
     notice->clear();
     auto secret = password->text();
     password->clear();
     session.login(server->text(), email->text(), secret);
   });
   connect(password, &QLineEdit::returnPressed, signIn, &QPushButton::click);
-  loginLayout->addWidget(
-      new QLabel("Use an account from your team administrator."));
+  loginRow->addWidget(loginPanel, 1);
+  loginRow->addStretch();
+  loginLayout->addLayout(loginRow);
   loginLayout->addStretch();
   pages->addWidget(login);
   auto home = new QWidget;
@@ -631,14 +649,19 @@ void MainWindow::settings() {
   auto form = new QFormLayout;
   layout->addLayout(form);
   auto input = new QComboBox, output = new QComboBox, cameras = new QComboBox;
+  input->setPlaceholderText("Loading microphones…");
+  output->setPlaceholderText("Loading speakers…");
+  input->setEnabled(false);
+  output->setEnabled(false);
+  cameras->setPlaceholderText("No cameras detected");
   form->addRow("Microphone", input);
   form->addRow("Speaker", output);
   form->addRow("Camera", cameras);
   for (const auto &device : QMediaDevices::videoInputs())
     cameras->addItem(device.description(), device.id());
+  cameras->setEnabled(cameras->count() > 0);
   auto index = cameras->findData(preferences.value("camera").toByteArray());
-  if (index >= 0)
-    cameras->setCurrentIndex(index);
+  cameras->setCurrentIndex(index >= 0 ? index : cameras->count() > 0 ? 0 : -1);
   connect(cameras, &QComboBox::activated, &dialog, [this, cameras] {
     preferences.setValue("camera", cameras->currentData());
   });
@@ -650,11 +673,16 @@ void MainWindow::settings() {
               box->clear();
               for (const auto &v : devices) {
                 auto d = v.toObject();
-                box->addItem(d["name"].toString(), d["id"].toString());
+                auto name = d["name"].toString().trimmed();
+                box->addItem(name.isEmpty() ? "System default" : name,
+                             d["id"].toString());
               }
+              box->setPlaceholderText(key == "microphone"
+                                          ? "No microphones detected"
+                                          : "No speakers detected");
+              box->setEnabled(!devices.isEmpty());
               int i = box->findData(chosen);
-              if (i >= 0)
-                box->setCurrentIndex(i);
+              box->setCurrentIndex(i >= 0 ? i : devices.isEmpty() ? -1 : 0);
             };
             populate(input, ins, "microphone");
             populate(output, outs, "speaker");
@@ -690,7 +718,7 @@ void MainWindow::settings() {
             if (d.id() == cameras->currentData().toByteArray())
               previewCapture.startCamera(d, true);
       });
-  testCamera->setEnabled(!session.connected);
+  testCamera->setEnabled(!session.connected && cameras->count() > 0);
   auto meter = new QProgressBar;
   meter->setRange(0, 100);
   meter->setAccessibleName("Local microphone level");

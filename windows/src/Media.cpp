@@ -131,6 +131,7 @@ public:
                                    {"name", QString::fromStdString(d.name)}});
       emit deviceList(inputs, outputs);
     } catch (const std::exception &) {
+      emit deviceList({}, {});
       emit failed(
           generation,
           "Audio device selection failed. Refresh devices and try again.",

@@ -99,3 +99,17 @@ Diagnostics are an explicit local JSON export containing app/Qt/OS versions and 
 no session tokens, server addresses, names, clipboard text, screenshots or transcripts. No upload is implemented.
 
 See [the acceptance record](../docs/windows-acceptance.md) for release-blocking checks and current evidence.
+
+## Isolated integration test
+
+Windows CI builds the Go API and runs `tests/run-media-test.py` with `--api` pointing to that executable.
+The runner starts disposable loopback Pairwise and LiveKit servers, creates synthetic accounts, accepts a
+direct call and supplies API-issued room credentials to two real native SDK clients. The clients decode
+synthetic audio/camera/screen tracks and authenticated control data; screen publishing obtains the real
+API share permission first. The runner then checks call completion/history and logout revocation.
+Room admission is kept alive during the test and all services are stopped afterward.
+
+This test uses no physical microphone, camera, display capture, OS clipboard or external application input.
+Those behaviors, mixed-platform interoperability and signed installation require the physical acceptance
+matrix. The separate platform test uses only its own foreground window for input and can skip on a
+non-interactive CI desktop.
