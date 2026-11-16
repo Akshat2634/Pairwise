@@ -27,6 +27,7 @@ $report = [ordered]@{
 }
 Add-Type -TypeDefinition @'
 using System;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 [ComImport, Guid("2e941141-7f97-4756-ba1d-9decde894a3d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 interface IPairwiseActivationManager {
@@ -37,6 +38,16 @@ interface IPairwiseActivationManager {
     [PreserveSig] int ActivateForProtocol([MarshalAs(UnmanagedType.LPWStr)] string appId, IntPtr items, out uint processId);
 }
 public static class PairwisePackageActivation {
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool GetExitCodeProcess(IntPtr handle, out uint exitCode);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool TerminateProcess(IntPtr handle, uint exitCode);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr handle);
     public static uint Launch(string appId) {
         var type = Type.GetTypeFromCLSID(new Guid("45ba127d-10a8-46ea-8ab7-56ea9078943c"));
         var manager = (IPairwiseActivationManager)Activator.CreateInstance(type);
@@ -45,6 +56,26 @@ public static class PairwisePackageActivation {
             Marshal.ThrowExceptionForHR(manager.ActivateApplication(appId, "--smoke-test", 2, out processId));
             return processId;
         } finally { Marshal.FinalReleaseComObject(manager); }
+    }
+    public static uint RunSmoke(string appId) {
+        uint processId = Launch(appId);
+        // Retain the OS handle before exit. PowerShell's Get-Process object may
+        // expose a null ExitCode for a process activated by the package manager.
+        IntPtr handle = OpenProcess(0x00100000 | 0x00001000 | 0x00000001, false, processId);
+        if (handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        try {
+            uint result = WaitForSingleObject(handle, 30000);
+            if (result == 258) {
+                TerminateProcess(handle, 1);
+                WaitForSingleObject(handle, 5000);
+                throw new InvalidOperationException("Installed native app startup/shutdown timed out.");
+            }
+            if (result != 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+            uint exitCode;
+            if (!GetExitCodeProcess(handle, out exitCode)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            if (exitCode != 0) throw new InvalidOperationException("Installed native app failed with exit code 0x" + exitCode.ToString("X8"));
+            return exitCode;
+        } finally { CloseHandle(handle); }
     }
 }
 '@
@@ -74,14 +105,8 @@ try {
             throw 'Package identity changed across the update.'
         }
         $family = $installed.PackageFamilyName
-        $processId = [PairwisePackageActivation]::Launch("${family}!Pairwise")
-        $process = Get-Process -Id $processId -ErrorAction Stop
-        if (!$process.WaitForExit(30000)) {
-            $process.Kill()
-            throw 'Installed native app startup/shutdown timed out.'
-        }
-        if ($process.ExitCode -ne 0) { throw "Installed native app failed with exit code $($process.ExitCode)." }
-        $results.Add([ordered]@{version=$version; installed=$true; activatedWithPackageIdentity=$true; smokeExitCode=0})
+        $exitCode = [PairwisePackageActivation]::RunSmoke("${family}!Pairwise")
+        $results.Add([ordered]@{version=$version; installed=$true; activatedWithPackageIdentity=$true; smokeExitCode=$exitCode})
     }
     Remove-AppxPackage -Package $installed.PackageFullName
     if (Get-AppxPackage -Name Pairwise.Desktop) { throw 'Package remained installed after removal.' }
