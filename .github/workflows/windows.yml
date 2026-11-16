@@ -17,6 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
+        id: python
         with:
           python-version: '3.12'
       - uses: actions/setup-go@v5
@@ -30,7 +31,7 @@ jobs:
           modules: qtmultimedia
           cache: true
       - name: Fetch verified LiveKit Windows x64 SDK
-        run: python windows/cmake/fetch-livekit.py windows-x64 .cache/livekit
+        run: '& "${{ steps.python.outputs.python-path }}" windows/cmake/fetch-livekit.py windows-x64 .cache/livekit'
       - name: Configure and build native client and tests
         shell: pwsh
         run: |
@@ -68,7 +69,7 @@ jobs:
           if ($app.ExitCode) { throw "Native smoke test failed: $($app.ExitCode)" }
           $env:PATH = "$pwd/build/stage;$env:PATH"
           $env:PAIRWISE_TEST_LOG_DIR = "$pwd/build/test-service-logs"
-          python windows/tests/run-media-test.py build/windows/Release/pairwise_media_test.exe --api build/windows/pairwise-api.exe
+          & "${{ steps.python.outputs.python-path }}" windows/tests/run-media-test.py build/windows/Release/pairwise_media_test.exe --api build/windows/pairwise-api.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./windows/packaging/package.ps1 -Stage build/stage -Output build/packages
       - name: Preserve isolated service failure logs
