@@ -443,14 +443,17 @@ void Media::send(const QString &topic, const QJsonObject &packet,
     return;
   if (pendingSends.fetch_add(1) >= 128) {
     pendingSends.fetch_sub(1);
+    // Invalidate sends before notifying listeners: cleanup itself sends release
+    // packets, which must not recursively overflow the same full queue.
+    leave();
     emit error("Collaboration queue is full. Remote control has stopped.");
-    emit reconnecting();
+    emit disconnected();
     return;
   }
-  const auto n = generation;
+  const auto n = generation.load();
   QMetaObject::invokeMethod(worker, [=, this] {
     pendingSends.fetch_sub(1);
-    if (n != worker->generation || !worker->room)
+    if (n != generation.load() || n != worker->generation || !worker->room)
       return;
     try {
       if (auto local = worker->room->localParticipant().lock())

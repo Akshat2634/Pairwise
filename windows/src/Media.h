@@ -43,7 +43,7 @@ signals:
 private:
   QThread thread;
   MediaWorker *worker;
-  quint64 generation = 0;
+  std::atomic<quint64> generation = 0;
   bool active = false;
   QSet<QString> remoteTracks;
   std::atomic<int> pendingSends = 0;
