@@ -1,0 +1,55 @@
+name: Windows
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-client:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          modules: qtmultimedia
+          cache: true
+      - name: Fetch verified LiveKit Windows x64 SDK
+        run: python windows/cmake/fetch-livekit.py windows-x64 .cache/livekit
+      - name: Configure and build native client and tests
+        shell: pwsh
+        run: |
+          cmake -S windows -B build/windows -A x64 -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR;$pwd/.cache/livekit/livekit-sdk-windows-x64-1.13.1"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build/windows --config Release --parallel 4
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Test API lifecycle and macOS wire compatibility
+        run: ctest --test-dir build/windows -C Release --output-on-failure
+      - name: Stage native runtime and build validated unsigned MSIX
+        shell: pwsh
+        run: |
+          cmake --install build/windows --config Release --prefix build/stage
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          windeployqt --release --compiler-runtime --no-translations build/stage/Pairwise.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Copy-Item LICENSE build/stage/LICENSE.txt
+          Copy-Item THIRD_PARTY_NOTICES.md build/stage/THIRD_PARTY_NOTICES.md
+          Copy-Item -Recurse .cache/livekit/livekit-sdk-windows-x64-1.13.1/share build/stage/livekit-notices
+          ./windows/packaging/package.ps1 -Stage build/stage -Output build/packages
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pairwise-windows-x64-unsigned-preview
+          path: |
+            build/packages/*
+          if-no-files-found: error
