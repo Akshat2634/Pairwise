@@ -521,14 +521,18 @@ final class CallIntegrationTests: XCTestCase {
                     }
                     try await Task.sleep(for: .milliseconds(100))
                 }
-                let encoderDiagnostics = cameraTrack.statistics?.outboundRtpStream.map {
-                    "rid=\($0.rid ?? "unknown") active=\(String(describing: $0.active)) " +
-                    "encoded=\(String(describing: $0.frameWidth))x\(String(describing: $0.frameHeight)) " +
-                    "fps=\(String(describing: $0.framesPerSecond)) " +
-                    "targetBitrate=\(String(describing: $0.targetBitrate)) " +
-                    "bytesSent=\(String(describing: $0.bytesSent)) " +
-                    "framesEncoded=\(String(describing: $0.framesEncoded)) " +
-                    "limitation=\(String(describing: $0.qualityLimitationReason))"
+                let encoderDiagnostics = cameraTrack.statistics?.outboundRtpStream.map { stream in
+                    let fields: [String] = [
+                        "rid=\(stream.rid ?? "unknown")",
+                        "active=\(String(describing: stream.active))",
+                        "encoded=\(String(describing: stream.frameWidth))x\(String(describing: stream.frameHeight))",
+                        "fps=\(String(describing: stream.framesPerSecond))",
+                        "targetBitrate=\(String(describing: stream.targetBitrate))",
+                        "bytesSent=\(String(describing: stream.bytesSent))",
+                        "framesEncoded=\(String(describing: stream.framesEncoded))",
+                        "limitation=\(String(describing: stream.qualityLimitationReason))",
+                    ]
+                    return fields.joined(separator: " ")
                 } ?? []
                 print("[CameraBenchmark] layer warm-up settled=\(settled); encoders: \(encoderDiagnostics)")
                 let constrained = ProcessInfo.processInfo.environment["PAIRDESK_BENCHMARK_PROFILE"] == "constrained"
