@@ -97,6 +97,17 @@ signatures, and record clean-machine install/update/uninstall before publication
 Credential Manager rather than MSIX files; explicit sign-out deletes them. Windows may retain OS credentials
 after uninstall, so verify and document that behavior in clean-machine acceptance.
 
+The MSIX declares microphone and webcam capabilities so Windows privacy settings can show its device
+intent at installation, following [Microsoft's guidance for packaged desktop apps](https://learn.microsoft.com/windows/apps/package-and-deploy/app-capability-declarations#privacy-sensitive-capabilities).
+Device denial still stops capture and displays an error; declaring a capability does not start recording.
+
+`packaging/test-deployment.ps1` is restricted to disposable GitHub-hosted Windows runners. It creates a
+one-day, non-exportable test signing key, temporarily trusts its public certificate, and tests installation,
+package-identity activation, a version update, and uninstall. Cleanup removes the package and temporary
+trust even on failure. Test-signed packages are kept separate from the unsigned preview artifact and are
+never published. This exercises the installer implementation; Windows Server CI and a temporary test
+certificate do not establish Windows 10/11 clean-machine or production publisher acceptance.
+
 Diagnostics are an explicit local JSON export containing app/Qt/OS versions and media booleans. They contain
 no session tokens, server addresses, names, clipboard text, screenshots or transcripts. No upload is implemented.
 

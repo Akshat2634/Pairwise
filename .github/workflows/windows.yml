@@ -69,6 +69,16 @@ jobs:
           python windows/tests/run-media-test.py build/windows/Release/pairwise_media_test.exe --api build/windows/pairwise-api.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./windows/packaging/package.ps1 -Stage build/stage -Output build/packages
+      - name: Test signed install, update, activation and uninstall on disposable CI
+        shell: powershell
+        run: ./windows/packaging/test-deployment.ps1 -Stage build/stage -Output build/deployment-test
+      - name: Preserve deployment test evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pairwise-windows-deployment-result
+          path: build/deployment-test/deployment-result.json
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v6
         with:
           name: pairwise-windows-x64-unsigned-preview
