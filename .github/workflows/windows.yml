@@ -40,6 +40,13 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Test API lifecycle and macOS wire compatibility
         run: ctest --test-dir build/windows -C Release --verbose
+      - name: Preserve per-case native test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pairwise-windows-test-results
+          path: build/windows/windows-*.xml
+          if-no-files-found: warn
       - name: Build isolated Pairwise API for native end-to-end test
         working-directory: server
         run: go build -o ../build/windows/pairwise-api.exe ./cmd/pairdesk-api
