@@ -527,7 +527,12 @@ final class CallIntegrationTests: XCTestCase {
                     "limitation=\(String(describing: $0.qualityLimitationReason))"
                 } ?? []
                 print("[CameraBenchmark] layer warm-up settled=\(settled); encoders: \(encoderDiagnostics)")
-                XCTAssertTrue(settled, "Camera layers must show sustained thumbnail-to-gallery scaling within 20 seconds")
+                let constrained = ProcessInfo.processInfo.environment["PAIRDESK_BENCHMARK_PROFILE"] == "constrained"
+                let bandwidthLimited = cameraTrack.statistics?.outboundRtpStream.contains {
+                    $0.qualityLimitationReason == .bandwidth
+                } == true
+                XCTAssertTrue(settled || (constrained && bandwidthLimited),
+                              "Camera layers must scale unless the constrained sender reports bandwidth limitation")
                 for receiver in cameraReceivers { receiver.beginCameraMeasurement() }
                 let cameraMeasurementStartedAt = ProcessInfo.processInfo.systemUptime
                 let cameraCPUStart = ProcessCPUProbe.capture()
@@ -553,7 +558,10 @@ final class CallIntegrationTests: XCTestCase {
                 }
                 let measuredCamera = SyntheticCameraBenchmark(
                     publishWidth: 1920, publishHeight: 1080, maximumFramesPerSecond: 30,
-                    harnessProcessCPUPercent: cameraCPU, receivers: measuredViews)
+                    harnessProcessCPUPercent: cameraCPU, receivers: measuredViews,
+                    senderReportedBandwidthLimitation: cameraTrack.statistics?.outboundRtpStream.contains {
+                        $0.qualityLimitationReason == .bandwidth
+                    } == true)
                 frameTask?.cancel()
                 await frameTask?.value
                 frameTask = nil
@@ -790,7 +798,7 @@ private final class SyntheticVideoReceiver: NSObject, RoomDelegate, VideoRendere
 }
 
 private struct SyntheticMediaBenchmark: Encodable {
-    let schemaVersion = 6
+    let schemaVersion = 7
     let classification: String
     let networkProfile: String
     let configuredNetwork: SyntheticNetworkProfile
@@ -823,15 +831,18 @@ private struct SyntheticCameraBenchmark: Encodable {
     let maximumFramesPerSecond: Int
     let harnessProcessCPUPercent: Double?
     let receivers: [SyntheticCameraReceiverMeasurement]
+    let senderReportedBandwidthLimitation: Bool
     let unmeasured = ["separate_sender_receiver_cpu", "physical_camera_quality", "readability"]
 
     init(publishWidth: Int, publishHeight: Int, maximumFramesPerSecond: Int,
-         harnessProcessCPUPercent: Double?, receivers: [SyntheticCameraReceiverMeasurement]) {
+         harnessProcessCPUPercent: Double?, receivers: [SyntheticCameraReceiverMeasurement],
+         senderReportedBandwidthLimitation: Bool) {
         self.publishWidth = publishWidth
         self.publishHeight = publishHeight
         self.maximumFramesPerSecond = maximumFramesPerSecond
         self.harnessProcessCPUPercent = harnessProcessCPUPercent
         self.receivers = receivers
+        self.senderReportedBandwidthLimitation = senderReportedBandwidthLimitation
     }
 }
 
