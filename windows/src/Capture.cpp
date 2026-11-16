@@ -108,23 +108,35 @@ bool Capture::shareScreen(QScreen *target) {
   shareSession.setWindowCapture(nullptr);
   shareSession.setScreenCapture(&screen);
   screen.setScreen(target);
+  shareRequested = true;
+  windowRequested = false;
   screen.start();
   emit changed();
-  return true;
+  return shareRequested;
 }
-void Capture::shareWindow(const QCapturableWindow &target) {
+bool Capture::shareWindow(const QCapturableWindow &target) {
   stopShare();
+  if (!target.isValid()) {
+    emit error("The selected window is no longer available. Choose it again.");
+    return false;
+  }
   shareSession.setScreenCapture(nullptr);
   shareSession.setWindowCapture(&window);
   window.setWindow(target);
+  shareRequested = true;
+  windowRequested = true;
   window.start();
   emit changed();
+  return shareRequested;
 }
 void Capture::stopShare() {
   if (stopping)
     return;
   stopping = true;
-  bool was = screen.isActive() || window.isActive() || selectedScreen;
+  bool was = shareRequested || screen.isActive() || window.isActive() ||
+             selectedScreen;
+  shareRequested = false;
+  windowRequested = false;
   if (selectedScreen)
     disconnect(selectedScreen, nullptr, this, nullptr);
   screen.stop();

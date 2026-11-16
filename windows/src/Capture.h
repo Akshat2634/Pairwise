@@ -17,11 +17,11 @@ public:
   void startCamera(const QCameraDevice &device, bool previewOnly = false);
   void stopCamera();
   bool shareScreen(QScreen *screen);
-  void shareWindow(const QCapturableWindow &window);
+  bool shareWindow(const QCapturableWindow &window);
   void stopShare();
   bool cameraActive() const { return camera && camera->isActive(); }
-  bool sharing() const { return screen.isActive() || window.isActive(); }
-  bool windowSharing() const { return window.isActive(); }
+  bool sharing() const { return shareRequested; }
+  bool windowSharing() const { return shareRequested && windowRequested; }
   QRect controlBounds() const { return physicalBounds; }
 signals:
   void frame(bool screen, const QImage &image);
@@ -41,7 +41,8 @@ private:
   QPointer<QScreen> selectedScreen;
   std::unique_ptr<QWidget> border;
   QRect physicalBounds;
-  bool previewOnly = false, stopping = false;
+  bool previewOnly = false, stopping = false, shareRequested = false,
+       windowRequested = false;
   quint64 cameraGeneration = 0;
 };
 } // namespace pairwise

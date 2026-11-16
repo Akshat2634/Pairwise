@@ -646,7 +646,10 @@ void MainWindow::share() {
             session.share(false, [](bool) {});
             return;
           }
-          capture.shareWindow(window);
+          if (!capture.shareWindow(window)) {
+            session.share(false, [](bool) {});
+            return;
+          }
         }
         collaboration.sharing(true, capture.windowSharing(),
                               capture.controlBounds());
