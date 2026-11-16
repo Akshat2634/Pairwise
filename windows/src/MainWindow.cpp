@@ -567,13 +567,19 @@ void MainWindow::share() {
     capture.stopShare();
     return;
   }
-  const auto screens = QGuiApplication::screens();
+  QList<QPointer<QScreen>> screens;
+  for (auto screen : QGuiApplication::screens())
+    screens.append(screen);
   const auto windows = QWindowCapture::capturableWindows();
   QStringList choices;
   for (auto screen : screens)
-    choices << "Display: " + screen->name();
+    choices << QString("Display %1: %2")
+                   .arg(choices.size() + 1)
+                   .arg(screen->name());
   for (const auto &window : windows)
-    choices << "Window: " + window.description();
+    choices << QString("Window %1: %2")
+                   .arg(choices.size() + 1 - screens.size())
+                   .arg(window.description());
   bool ok = false;
   auto choice =
       QInputDialog::getItem(this, "Choose what to share",
@@ -583,29 +589,34 @@ void MainWindow::share() {
   if (!ok)
     return;
   int index = choices.indexOf(choice);
-  session.share(true, [this, screens, windows, index](bool allowed) {
-    if (!allowed)
-      return;
-    media.screenSource(index >= screens.size());
-    if (index < screens.size()) {
-      // The display may have been unplugged while the API request was in
-      // flight.
-      if (!QGuiApplication::screens().contains(screens[index]) ||
-          !capture.shareScreen(screens[index])) {
-        session.share(false, [](bool) {});
-        return;
-      }
-    } else {
-      auto window = windows[index - screens.size()];
-      if (!window.isValid()) {
-        session.share(false, [](bool) {});
-        return;
-      }
-      capture.shareWindow(window);
-    }
-    collaboration.sharing(true, capture.windowSharing(),
-                          capture.controlBounds());
-  });
+  if (index < 0)
+    return;
+  QPointer<QScreen> selectedDisplay;
+  if (index < screens.size())
+    selectedDisplay = screens[index];
+  session.share(
+      true, [this, selectedDisplay, screens, windows, index](bool allowed) {
+        if (!allowed)
+          return;
+        media.screenSource(index >= screens.size());
+        if (index < screens.size()) {
+          // The display may have been unplugged while the API request was in
+          // flight.
+          if (!selectedDisplay || !capture.shareScreen(selectedDisplay)) {
+            session.share(false, [](bool) {});
+            return;
+          }
+        } else {
+          auto window = windows[index - screens.size()];
+          if (!window.isValid()) {
+            session.share(false, [](bool) {});
+            return;
+          }
+          capture.shareWindow(window);
+        }
+        collaboration.sharing(true, capture.windowSharing(),
+                              capture.controlBounds());
+      });
 }
 void MainWindow::settings() {
   QDialog dialog(this);
