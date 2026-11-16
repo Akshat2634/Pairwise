@@ -1,5 +1,7 @@
 #include "Platform.h"
 #include "Protocol.h"
+#include <QApplication>
+#include <QClipboard>
 #include <QLineEdit>
 #include <QUuid>
 #include <QtTest>
@@ -64,6 +66,48 @@ private slots:
     QVERIFY(!(GetAsyncKeyState(VK_SHIFT) & 0x8000));
     QVERIFY(!(GetAsyncKeyState('A') & 0x8000));
     QVERIFY(!gate.accept(down, "peer", 3));
+  }
+  void win32ClipboardCopyAndPasteInOwnedWindow() {
+    if (qgetenv("GITHUB_ACTIONS") != "true" ||
+        qgetenv("RUNNER_ENVIRONMENT") != "github-hosted")
+      QSKIP("Synthetic OS clipboard tests run only on disposable hosted CI; "
+            "they never inspect or overwrite a user's clipboard.");
+    InputInjector injector;
+    if (!injector.desktopAvailable())
+      QSKIP("No interactive Windows desktop available for clipboard dispatch.");
+    QLineEdit destination;
+    destination.resize(500, 60);
+    destination.show();
+    destination.raise();
+    destination.activateWindow();
+    destination.setFocus();
+    QVERIFY(QTest::qWaitForWindowActive(&destination, 3000));
+    const auto target = reinterpret_cast<HWND>(destination.winId());
+    QVERIFY(GetForegroundWindow() == target);
+    auto clipboard = QApplication::clipboard();
+    struct Cleanup {
+      InputInjector &injector;
+      QClipboard *clipboard;
+      ~Cleanup() {
+        injector.releaseAll();
+        clipboard->clear();
+      }
+    } cleanup{injector, clipboard};
+    clipboard->clear();
+    const auto copied = QStringLiteral("Windows copy · 你好");
+    destination.setText(copied);
+    destination.selectAll();
+    QVERIFY(injector.shortcut(false));
+    QTRY_COMPARE(clipboard->text(), copied);
+    const auto pasted = QStringLiteral("Windows paste · नमस्ते");
+    clipboard->setText(pasted);
+    destination.selectAll();
+    QVERIFY(GetForegroundWindow() == target);
+    QVERIFY(injector.shortcut(true));
+    QTRY_COMPARE(destination.text(), pasted);
+    QVERIFY(!(GetAsyncKeyState(VK_CONTROL) & 0x8000));
+    QVERIFY(!(GetAsyncKeyState('C') & 0x8000));
+    QVERIFY(!(GetAsyncKeyState('V') & 0x8000));
   }
 };
 QTEST_MAIN(WindowsPlatformTests)
