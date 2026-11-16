@@ -10,6 +10,6 @@ if (!$redist) { throw 'MSVC redistributable runtime is missing.' }
 $crt = Join-Path $redist.FullName 'x64/Microsoft.VC143.CRT'
 if (!(Test-Path "$crt/msvcp140.dll")) { throw 'The x64 MSVC CRT directory is missing.' }
 Copy-Item "$crt/*.dll" $Stage -Force
-foreach ($name in @('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll')) {
+foreach ($name in @('msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll','vcruntime140.dll','vcruntime140_1.dll')) {
     if (!(Test-Path "$Stage/$name")) { throw "Required app-local runtime DLL missing: $name" }
 }
