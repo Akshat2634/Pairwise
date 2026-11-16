@@ -46,6 +46,13 @@ jobs:
           Copy-Item LICENSE build/stage/LICENSE.txt
           Copy-Item THIRD_PARTY_NOTICES.md build/stage/THIRD_PARTY_NOTICES.md
           Copy-Item -Recurse .cache/livekit/livekit-sdk-windows-x64-1.13.1/share build/stage/livekit-notices
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $app = Start-Process build/stage/Pairwise.exe -ArgumentList '--smoke-test' -PassThru
+          if (!$app.WaitForExit(30000)) { $app.Kill(); throw 'Native startup/shutdown timed out.' }
+          if ($app.ExitCode) { throw "Native smoke test failed: $($app.ExitCode)" }
+          $env:PATH = "$pwd/build/stage;$env:PATH"
+          python windows/tests/run-media-test.py build/windows/Release/pairwise_media_test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./windows/packaging/package.ps1 -Stage build/stage -Output build/packages
       - uses: actions/upload-artifact@v6
         with:

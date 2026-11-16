@@ -1,5 +1,6 @@
 #include "CallSession.h"
 #include "Protocol.h"
+#include <QFile>
 #include <QJsonDocument>
 #include <QSignalSpy>
 #include <QTcpServer>
@@ -82,6 +83,24 @@ public:
 class CoreTests : public QObject {
   Q_OBJECT
 private slots:
+  void sharedSwiftFixtures() {
+    QFile control(QString(PAIRWISE_FIXTURES_DIR) + "/control-v1.json");
+    QVERIFY(control.open(QIODevice::ReadOnly));
+    auto p = QJsonDocument::fromJson(control.readAll()).object();
+    QVERIFY(validControl(p));
+    QCOMPARE(qtKey(p["code"].toInt()).value(), int(Qt::Key_C));
+    QCOMPARE(p["modifiers"].toInteger(), qint64(1 << 20));
+    QFile clipboard(QString(PAIRWISE_FIXTURES_DIR) + "/clipboard-v1.json");
+    QVERIFY(clipboard.open(QIODevice::ReadOnly));
+    auto part = QJsonDocument::fromJson(clipboard.readAll()).object();
+    ClipboardAssembler assembler;
+    auto now = QDateTime::fromMSecsSinceEpoch(
+        qint64((part["createdAt"].toDouble() + 978307200.0) * 1000));
+    auto text = assembler.add(part, "macos", "recipient", now);
+    QVERIFY(text);
+    QCOMPARE(*text,
+             QString::fromUtf8("Pairwise Windows ↔ macOS 🙂\nsecond line"));
+  }
   void serverValidation() {
     QVERIFY(serverUrl(" https://team.example/ "));
     QVERIFY(serverUrl("http://127.0.0.1:18080"));

@@ -396,6 +396,12 @@ MainWindow::MainWindow()
     session.restore(savedServer, token);
 }
 MainWindow::~MainWindow() {
+  // Member destructors stop capture and emit state changes after later members
+  // (including the prompt map) have already been destroyed.
+  disconnect(&session, nullptr, this, nullptr);
+  disconnect(&media, nullptr, this, nullptr);
+  disconnect(&capture, nullptr, this, nullptr);
+  disconnect(&collaboration, nullptr, this, nullptr);
   qApp->removeNativeEventFilter(this);
 #ifdef Q_OS_WIN
   UnregisterHotKey(reinterpret_cast<HWND>(winId()), 0x5041);
