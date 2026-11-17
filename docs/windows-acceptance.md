@@ -2,6 +2,10 @@
 
 Issue: [#127](https://github.com/EvAlssment/Pairwise/issues/127). Status: native client preview, release blocked.
 
+Platform decision: prioritize Windows 11 x64, with Windows 10 x64 build 19041+
+compatibility retained. Complete Windows 11 acceptance first, then repeat the
+compatibility matrix on Windows 10. Neither has passed physical acceptance yet.
+
 Do not mark physical checks as passed based on unit tests, synthetic media, or a successful package build.
 Record Windows edition/build, GPU/driver, CPU, RAM, audio/video devices, display resolution/scaling,
 peer app commit/version, API/LiveKit versions, network conditions and measured outcomes for each run.

@@ -4,7 +4,9 @@ This is the implementation/spike for [issue #127](https://github.com/EvAlssment/
 It is **not a production Windows release**. Windows CI produces an unsigned MSIX for packaging validation;
 signed distribution and physical Windows-to-Windows / Windows-to-macOS acceptance remain required.
 
-Target: Windows 10 x64 version 2004 (build 19041) or later and Windows 11 x64.
+Primary target: Windows 11 x64. Retain compatibility with Windows 10 x64 version 2004
+(build 19041) or later; validate both before release. Windows 11 is the first physical
+acceptance platform, followed by the Windows 10 compatibility matrix.
 ARM64, 32-bit Windows, Windows Server, elevated application control, secure desktop/UAC,
 unattended access, and background recording are unsupported. OS versions listed here are build targets,
 not a claim that the physical acceptance matrix has passed.

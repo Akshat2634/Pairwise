@@ -75,7 +75,11 @@ def run(executable, server, api_executable):
             headers = {"Content-Type": "application/json"}
             if session:
                 headers["Authorization"] = "Bearer " + session["token"]
-            data = None if body is None else json.dumps(body).encode()
+            # urllib closes each HTTP/1.1 connection. Go intentionally skips
+            # draining unused bodies on Connection: close, which can race a
+            # separately sent '{}' and reset the socket on Windows. Bodyless
+            # API actions still use POST (b''), without sending unused bytes.
+            data = None if body is None else (b"" if not body else json.dumps(body).encode())
             req = urllib.request.Request(api_url + path, data=data, headers=headers)
             with opener.open(req, timeout=10) as response:
                 content = response.read()
@@ -117,7 +121,11 @@ def run(executable, server, api_executable):
                     while not heartbeat_stop.wait(5):
                         try:
                             for session in sessions:
+                                if heartbeat_stop.is_set():
+                                    return
                                 request("/v1/heartbeat", session, {})
+                                if heartbeat_stop.is_set():
+                                    return
                                 request("/v1/rooms/" + room_id + "/heartbeat", session, {})
                         except Exception as error:
                             heartbeat_errors.append(type(error).__name__)
@@ -129,6 +137,8 @@ def run(executable, server, api_executable):
             heartbeat_stop.set()
             if heartbeat_thread:
                 heartbeat_thread.join(timeout=12)
+                if heartbeat_thread.is_alive():
+                    raise RuntimeError("API heartbeat did not stop before call cleanup")
             if heartbeat_errors:
                 raise RuntimeError("API admission heartbeat failed during native media test")
             if sessions:
