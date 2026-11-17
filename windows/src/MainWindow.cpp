@@ -408,12 +408,22 @@ MainWindow::MainWindow()
         prompt->setTextFormat(Qt::PlainText);
         prompt->setDefaultButton(QMessageBox::No);
         prompt->setAttribute(Qt::WA_DeleteOnClose);
-        connect(prompt, &QMessageBox::finished, this, [this, id](int result) {
-          if (result == QMessageBox::Yes)
-            collaboration.grant(id);
-          else
-            collaboration.deny(id);
-        });
+        connect(&collaboration, &Collaboration::changed, prompt,
+                [this, id, prompt] {
+                  if (!collaboration.awaitingConsent(id))
+                    prompt->reject();
+                });
+        connect(prompt, &QMessageBox::finished, this,
+                [this, id, prompt](int result) {
+                  // A grant revokes other pending requests and emits changed.
+                  // Detach first so closing this dialog cannot reenter its
+                  // finished handler.
+                  disconnect(&collaboration, nullptr, prompt, nullptr);
+                  if (result == QMessageBox::Yes)
+                    collaboration.grant(id);
+                  else
+                    collaboration.deny(id);
+                });
         prompt->open();
       });
   qApp->installNativeEventFilter(this);

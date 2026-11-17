@@ -21,6 +21,9 @@ public:
   void deny(const QString &identity);
   void input(QJsonObject event);
   void cursor(const QPointF &position, bool visible = true);
+  bool awaitingConsent(const QString &identity) const {
+    return active && host && !windowShare && pendingRequests.contains(identity);
+  }
   bool controlling() const { return !viewerEpoch.isEmpty(); }
   bool hosting() const { return !gate.driver.isEmpty(); }
   QString driver() const { return gate.driver; }
