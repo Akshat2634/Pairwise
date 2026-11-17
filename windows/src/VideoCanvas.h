@@ -24,6 +24,7 @@ protected:
   void mousePressEvent(QMouseEvent *) override;
   void mouseReleaseEvent(QMouseEvent *) override;
   void wheelEvent(QWheelEvent *) override;
+  bool focusNextPrevChild(bool next) override;
   void keyPressEvent(QKeyEvent *) override;
   void keyReleaseEvent(QKeyEvent *) override;
   void focusOutEvent(QFocusEvent *) override;

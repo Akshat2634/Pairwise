@@ -114,24 +114,31 @@ void VideoCanvas::wheelEvent(QWheelEvent *e) {
 }
 void VideoCanvas::key(QKeyEvent *e, bool down) {
   if (!controlling) {
-    QWidget::keyPressEvent(e);
+    if (down)
+      QWidget::keyPressEvent(e);
+    else
+      QWidget::keyReleaseEvent(e);
     return;
   }
-  if (e->isAutoRepeat())
+  // Qt synthesizes release/press pairs while a physical key remains down.
+  // Forward repeated presses, but keep the remote key held until real release.
+  if (e->isAutoRepeat() && (!down || e->key() == Qt::Key_Escape)) {
+    e->accept();
     return;
+  }
   if (e->key() == Qt::Key_Escape && down) {
     emit unfocused();
     return;
   }
   if (e->modifiers() == Qt::ControlModifier &&
       (e->key() == Qt::Key_C || e->key() == Qt::Key_V)) {
-    if (down)
+    if (down && !e->isAutoRepeat())
       emit input({{"kind", e->key() == Qt::Key_C ? "clipboardCopy"
                                                  : "clipboardPaste"}});
     e->accept();
     return;
   }
-  int key = e->key();
+  int key = e->key() == Qt::Key_Backtab ? Qt::Key_Tab : e->key();
   const QMap<int, int> unshift = {{Qt::Key_Exclam, Qt::Key_1},
                                   {Qt::Key_At, Qt::Key_2},
                                   {Qt::Key_NumberSign, Qt::Key_3},
@@ -167,6 +174,11 @@ void VideoCanvas::key(QKeyEvent *e, bool down) {
                 {"down", down},
                 {"modifiers", qint64(macModifiers(e->modifiers()))}});
   e->accept();
+}
+bool VideoCanvas::focusNextPrevChild(bool next) {
+  // QWidget handles Tab before keyPressEvent. While controlling, let it reach
+  // the wire encoder instead of moving focus and releasing the control lease.
+  return controlling ? false : QWidget::focusNextPrevChild(next);
 }
 void VideoCanvas::keyPressEvent(QKeyEvent *e) { key(e, true); }
 void VideoCanvas::keyReleaseEvent(QKeyEvent *e) { key(e, false); }
