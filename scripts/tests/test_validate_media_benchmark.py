@@ -150,6 +150,7 @@ class MediaBenchmarkValidatorTests(unittest.TestCase):
     def run_validator(
         self,
         zero_bitrate: bool = False,
+        subnormal_bitrate: bool = False,
         malformed_readability: bool = False,
         zero_drops: bool = False,
         negative_rtt: bool = False,
@@ -168,6 +169,8 @@ class MediaBenchmarkValidatorTests(unittest.TestCase):
                         camera_mutation(profile, report["cameraSimulcast"])
                     if zero_bitrate:
                         report["receivedBitrateKilobitsPerSecond"] = 0
+                    if subnormal_bitrate:
+                        report["receivedBitrateKilobitsPerSecond"] = 5e-324
                     if malformed_readability:
                         report["syntheticReadability"]["recognizedTextPercent"] = 100.0
                     if negative_rtt and profile == "baseline" and participants == 2:
@@ -268,6 +271,17 @@ class MediaBenchmarkValidatorTests(unittest.TestCase):
         result = self.run_validator(camera_mutation=mutate)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("lacks a sustained frame sample", result.stderr)
+
+    def test_rejects_subnormal_bitrate_from_reinterpreted_integer_counter(self) -> None:
+        result = self.run_validator(subnormal_bitrate=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("received bitrate must be a positive measured value", result.stderr)
+
+    def test_rejects_subnormal_camera_bitrate(self) -> None:
+        result = self.run_validator(camera_mutation=lambda p, c: c["receivers"][0].update(
+            receivedBitrateKilobitsPerSecond=5e-324))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("camera bitrate must be positive when reported", result.stderr)
 
     def test_rejects_unmeasured_zero_bitrate(self) -> None:
         result = self.run_validator(zero_bitrate=True)

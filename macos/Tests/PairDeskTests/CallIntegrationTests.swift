@@ -731,8 +731,8 @@ private final class SyntheticVideoReceiver: NSObject, RoomDelegate, VideoRendere
         lock.lock()
         defer { lock.unlock() }
         let videoStats = remoteVideoTrack?.statistics?.inboundRtpStream.first(where: { $0.kind == "video" })
-        baselineBytes = videoStats?.bytesReceived.map(Double.init)
-        baselineReceived = videoStats?.packetsReceived.map(Double.init)
+        baselineBytes = videoStats?.bytesReceived.map { Double($0) }
+        baselineReceived = videoStats?.packetsReceived.map { Double($0) }
         baselineLost = videoStats?.packetsLost.map { Double(max(0, $0)) }
         cameraMeasurement = true
         measuredFrameCount = 0
@@ -777,9 +777,9 @@ private final class SyntheticVideoReceiver: NSObject, RoomDelegate, VideoRendere
         let firstFrameMilliseconds = firstFrameAt.map { max(0, ($0 - measurementStartedAt) * 1_000) }
         let stats = remoteVideoTrack?.statistics
         let videoStats = stats?.inboundRtpStream.first(where: { $0.kind == "video" })
-        var received = videoStats?.packetsReceived.map(Double.init)
+        var received = videoStats?.packetsReceived.map { Double($0) }
         var lost = videoStats?.packetsLost.map { Double(max(0, $0)) }
-        var bytes = videoStats?.bytesReceived.map(Double.init)
+        var bytes = videoStats?.bytesReceived.map { Double($0) }
         if cameraMeasurement {
             received = received.flatMap { value in baselineReceived.map { max(0, value - $0) } }
             lost = lost.flatMap { value in baselineLost.map { max(0, value - $0) } }

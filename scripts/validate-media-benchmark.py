@@ -227,7 +227,9 @@ def main() -> int:
                 or not minimum <= value <= maximum
             ):
                 raise ValueError(f"{name}: missing or invalid measured field: {field}")
-        if report["receivedBitrateKilobitsPerSecond"] <= 0:
+        # A bit-pattern reinterpretation of an integer counter can produce a
+        # finite positive subnormal Double. That is not a measured bitrate.
+        if report["receivedBitrateKilobitsPerSecond"] < sys.float_info.min:
             raise ValueError(f"{name}: received bitrate must be a positive measured value")
         if profile == "constrained" and report["selectedPathRTTMilliseconds"] < 20:
             raise ValueError(f"{name}: constrained profile did not measurably increase selected-path RTT")
@@ -295,7 +297,7 @@ def main() -> int:
                     value = receiver.get(field)
                     if value is not None and (not finite_number(value) or not 0 <= value <= maximum):
                         raise ValueError(f"{name}: invalid measured camera field: {field}")
-                    if field == "receivedBitrateKilobitsPerSecond" and value is not None and value <= 0:
+                    if field == "receivedBitrateKilobitsPerSecond" and value is not None and value < sys.float_info.min:
                         raise ValueError(f"{name}: camera bitrate must be positive when reported")
             if not received_areas[0] <= received_areas[1] <= received_areas[2]:
                 raise ValueError(f"{name}: decoded camera resolution must scale from thumbnail to gallery view size")
