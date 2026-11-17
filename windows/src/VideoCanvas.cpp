@@ -25,9 +25,9 @@ void VideoCanvas::setControlling(bool value) {
   update();
 }
 void VideoCanvas::setPointer(const QString &id, const QPointF &point,
-                             bool visible) {
+                             bool visible, const QString &label) {
   if (visible)
-    pointers[id] = {point, clock.elapsed()};
+    pointers[id] = {point, clock.elapsed(), label.isEmpty() ? id : label};
   else
     pointers.remove(id);
   update();
@@ -58,7 +58,7 @@ void VideoCanvas::paintEvent(QPaintEvent *) {
     painter.setPen(Qt::white);
     painter.setBrush(QColor("#6495ff"));
     painter.drawEllipse(pos, 5, 5);
-    painter.drawText(pos + QPointF(8, -6), i.key());
+    painter.drawText(pos + QPointF(8, -6), i->label);
     ++i;
   }
   if (controlling) {

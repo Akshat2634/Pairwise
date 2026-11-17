@@ -11,7 +11,8 @@ public:
   explicit VideoCanvas(QWidget *parent = nullptr);
   void setFrame(const QImage &image);
   void setControlling(bool value);
-  void setPointer(const QString &name, const QPointF &position, bool visible);
+  void setPointer(const QString &identity, const QPointF &position,
+                  bool visible, const QString &label = {});
   void clear();
 signals:
   void input(QJsonObject event);
@@ -38,6 +39,7 @@ private:
   struct Pointer {
     QPointF position;
     qint64 at;
+    QString label;
   };
   QMap<QString, Pointer> pointers;
   QElapsedTimer clock;

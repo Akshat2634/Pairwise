@@ -57,6 +57,28 @@ private slots:
     QCOMPARE(input[1][0].toJsonObject()["down"].toBool(), true);
     QCOMPARE(input[2][0].toJsonObject()["down"].toBool(), false);
   }
+  void sameDisplayNamesKeepIndependentCursorPositionsAndRemoval() {
+    VideoCanvas canvas;
+    canvas.resize(320, 200);
+    QImage frame(320, 200, QImage::Format_RGB32);
+    frame.fill(Qt::black);
+    canvas.setFrame(frame);
+    canvas.setPointer("first", {.25, .5}, true, "Same name");
+    canvas.setPointer("second", {.75, .5}, true, "Same name");
+    auto snapshot = [&] {
+      QImage image(canvas.size(), QImage::Format_ARGB32);
+      image.fill(Qt::transparent);
+      canvas.render(&image);
+      return image;
+    };
+    auto image = snapshot();
+    QCOMPARE(image.pixelColor(QPoint(80, 100)), QColor("#6495ff"));
+    QCOMPARE(image.pixelColor(QPoint(240, 100)), QColor("#6495ff"));
+    canvas.setPointer("first", {}, false, "Same name");
+    image = snapshot();
+    QCOMPARE(image.pixelColor(QPoint(80, 100)), QColor(Qt::black));
+    QCOMPARE(image.pixelColor(QPoint(240, 100)), QColor("#6495ff"));
+  }
   void heldClipboardShortcutDoesNotRepeatTransfers() {
     VideoCanvas canvas;
     canvas.setControlling(true);

@@ -257,11 +257,12 @@ MainWindow::MainWindow()
   tray.setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
   tray.setToolTip("Pairwise");
   auto menu = new QMenu(this);
-  menu->addAction("Open Pairwise", this, [this] {
+  auto reveal = [this] {
     showNormal();
     raise();
     activateWindow();
-  });
+  };
+  menu->addAction("Open Pairwise", this, reveal);
   menu->addAction("Stop remote control", this, [this] {
     collaboration.revoke();
     collaboration.releaseControl();
@@ -272,10 +273,13 @@ MainWindow::MainWindow()
   });
   tray.setContextMenu(menu);
   tray.show();
-  connect(&tray, &QSystemTrayIcon::activated, this, [this](auto) {
-    showNormal();
-    raise();
-  });
+  connect(&tray, &QSystemTrayIcon::messageClicked, this, reveal);
+  connect(&tray, &QSystemTrayIcon::activated, this,
+          [reveal](QSystemTrayIcon::ActivationReason reason) {
+            if (reason == QSystemTrayIcon::Trigger ||
+                reason == QSystemTrayIcon::DoubleClick)
+              reveal();
+          });
   connect(&session, &CallSession::changed, this, &MainWindow::refresh);
   connect(&session, &CallSession::error, this, &MainWindow::showError);
   connect(&session, &CallSession::authenticated, this,
@@ -384,7 +388,7 @@ MainWindow::MainWindow()
   connect(&collaboration, &Collaboration::error, this, &MainWindow::showError);
   connect(&collaboration, &Collaboration::pointer, this,
           [this](const QString &id, const QPointF &p, bool visible) {
-            canvas->setPointer(name(id), p, visible);
+            canvas->setPointer(id, p, visible, name(id));
           });
   connect(canvas, &VideoCanvas::input, &collaboration, &Collaboration::input);
   connect(canvas, &VideoCanvas::cursor, &collaboration, &Collaboration::cursor);
